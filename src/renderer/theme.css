@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+/* =========================================================================
+ *  NERV × Cyberpunk theme  (Tailwind v4 CSS-first config)
+ *
+ *  Translates the project's nerv.* palette + fonts + animations into
+ *  @theme tokens. Tailwind v4 auto-generates utilities from these:
+ *    --color-nerv-orange      -> bg-nerv-orange / text-nerv-orange / border-nerv-orange
+ *    --font-display           -> font-display
+ *    --animate-scanline       -> animate-scanline
+ *  Opacity modifiers (bg-nerv-orange/30) work because these are real colors.
+ * ========================================================================= */
+
+@theme {
+  /* ---- palette ---- */
+  --color-nerv-bg: #0a0a0c; /* deep tactical black */
+  --color-nerv-panel: #14151c; /* gunmetal container background */
+  --color-nerv-panel-2: #1c1d26; /* raised panel */
+  --color-nerv-border: #2a2b36; /* default hairline */
+  --color-nerv-orange: #ff5500; /* NERV emergency orange */
+  --color-nerv-amber: #ffaa00; /* warning text */
+  --color-nerv-cyan: #00f0ff; /* cyberpunk active state */
+  --color-nerv-green: #39ff14; /* cyberpunk terminal green */
+  --color-nerv-text: #e6edf3; /* primary text */
+  --color-nerv-muted: #6b7280; /* secondary text */
+
+  /* ---- typography ---- */
+  --font-mono: "JetBrains Mono", "Share Tech Mono", ui-monospace, "Cascadia Code",
+    Consolas, monospace;
+  --font-display: "Orbitron", "JetBrains Mono", system-ui, sans-serif;
+
+  /* ---- custom keyframe animations ---- */
+  --animate-scanline: scanline 4s linear infinite;
+  --animate-pulse-glow: pulse-glow 1.6s ease-in-out infinite;
+  --animate-blink: blink 1s steps(2, start) infinite;
+  --animate-boot-glitch: matrix-glitch 0.5s steps(3, end);
+  --animate-scanline-bar: scanline-bar 1.4s ease-in-out infinite;
+}
+
+/* ---- keyframes ---- */
+@keyframes scanline {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes matrix-glitch {
+  0% {
+    clip-path: inset(0 0 85% 0);
+    transform: translateX(-2px);
+    opacity: 0.9;
+  }
+  25% {
+    clip-path: inset(40% 0 40% 0);
+    transform: translateX(2px);
+    opacity: 1;
+  }
+  50% {
+    clip-path: inset(80% 0 5% 0);
+    transform: translateX(-1px);
+    opacity: 0.85;
+  }
+  75% {
+    clip-path: inset(20% 0 60% 0);
+    transform: translateX(1px);
+    opacity: 1;
+  }
+  100% {
+    clip-path: inset(0 0 0 0);
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes pulse-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 85, 0, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 8px 2px rgba(255, 85, 0, 0.6);
+  }
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
+
+@keyframes scanline-bar {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}

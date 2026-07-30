@@ -1,0 +1,234 @@
+import { useCallback, useMemo, useReducer, useRef } from "react";
+import type { MediaFile, MetaPatch, ScanProgress } from "../../scanner/types";
+
+/**
+ * Scan lifecycle owned by a reducer so file accumulation, status, error,
+ * and cancellation all transition atomically (review issue #1 — mutating
+ * a ref + bumping a version counter was fragile and could leave stale
+ * data in components that didn't subscribe to the version).
+ *
+ * Batches are accumulated as a list-of-lists (`MediaFile[][]`) and the
+ * flat view is memoized in the hook. Appending a batch is O(batch size)
+ * rather than O(running total) — the previous `state.files.concat(batch)`
+ * rebuilt the whole array every batch, i.e. O(n²) over a scan (v3 #1).
+ */
+
+export type ScanStatus = "idle" | "scanning" | "done" | "error" | "cancelled";
+
+export interface ScanState {
+  /** Append-only accumulated batches. Appending is O(batch), not O(total). */
+  batches: MediaFile[][];
+  /**
+   * Bumped on every batch append so consumers can depend on it without
+   * holding the (memoized) flat array reference in their deps.
+   */
+  filesVersion: number;
+  /** Running total across all batches — cheap, avoids flattening for `.length`. */
+  count: number;
+  status: ScanStatus;
+  /** Last reported progress snapshot, or null before/done. */
+  progress: ScanProgress | null;
+  /** Human-readable error message when `status === "error"`. */
+  error: string | null;
+}
+
+type ScanAction =
+  | { type: "reset"; folder: string | null }
+  | { type: "start" }
+  | { type: "batch"; files: MediaFile[] }
+  | { type: "progress"; progress: ScanProgress }
+  | { type: "done" }
+  | { type: "error"; message: string }
+  | { type: "cancelled" }
+  | { type: "restore"; files: MediaFile[] }
+  | { type: "metaBatch"; patches: MetaPatch[] };
+
+const initialState: ScanState = {
+  batches: [],
+  filesVersion: 0,
+  count: 0,
+  status: "idle",
+  progress: null,
+  error: null,
+};
+
+function scanReducer(state: ScanState, action: ScanAction): ScanState {
+  switch (action.type) {
+    case "reset":
+      return { ...initialState };
+    case "start":
+      return { ...initialState, status: "scanning" };
+    case "restore": {
+      // Instant restore from on-disk cache (v4 rework). Files appear at
+      // once without a filesystem walk; status is "done" so the grid
+      // renders immediately. A real rescan refreshes them.
+      const restored = action.files;
+      return {
+        ...initialState,
+        batches: restored.length > 0 ? [restored] : [],
+        filesVersion: restored.length > 0 ? 1 : 0,
+        count: restored.length,
+        status: "done",
+      };
+    }
+    case "batch": {
+      if (state.status !== "scanning") return state;
+      // O(batch) append — no cumulative copy of all prior files. The flat
+      // view is rebuilt lazily (and memoized) in the hook (v3 review #1).
+      return {
+        ...state,
+        batches: [...state.batches, action.files],
+        filesVersion: state.filesVersion + 1,
+        count: state.count + action.files.length,
+      };
+    }
+    case "metaBatch": {
+      if (state.status !== "scanning") return state;
+      // Phase-2 metadata patches arrive mid-scan and patch existing
+      // placeholder files in place. O(patches + batches) — build a
+      // lookup Map, then for each batch rewrite it only if any file in
+      // it matches, else reuse the same array reference (no copy).
+      const byPath = new Map<string, MetaPatch>();
+      for (const patch of action.patches) byPath.set(patch.filePath, patch);
+      if (byPath.size === 0) return state;
+      let changed = false;
+      const nextBatches = state.batches.map((batch) => {
+        let rewrote = false;
+        const patched = batch.map((file) => {
+          const patch = byPath.get(file.filePath);
+          if (!patch) return file;
+          rewrote = true;
+          return {
+            ...file,
+            sizeBytes: patch.sizeBytes,
+            birthtimeMs: patch.birthtimeMs,
+            birthtime: patch.birthtime,
+            dateKey: patch.dateKey,
+          };
+        });
+        if (!rewrote) return batch;
+        changed = true;
+        return patched;
+      });
+      if (!changed) return state;
+      return {
+        ...state,
+        batches: nextBatches,
+        filesVersion: state.filesVersion + 1,
+      };
+    }
+    case "progress":
+      return state.status === "scanning"
+        ? { ...state, progress: action.progress }
+        : state;
+    case "done":
+      return { ...state, status: "done", progress: null };
+    case "error":
+      return { ...state, status: "error", error: action.message, progress: null };
+    case "cancelled":
+      return { ...state, status: "cancelled", progress: null };
+    default:
+      return state;
+  }
+}
+
+export interface UseScanStateReturn {
+  state: ScanState;
+  /**
+   * Lazily-flattened, memoized view of all accumulated files. Recomputes
+   * only when `filesVersion` changes; referentially stable between
+   * renders that don't touch the batches (v3 review #1).
+   */
+  files: MediaFile[];
+  /** Mark a fresh scan start: clears files, sets status to scanning. */
+  onStart: () => void;
+  /** Reset everything to idle (e.g. when picking a new folder). */
+  onReset: () => void;
+  /** Accumulate one streamed batch of files. */
+  onBatch: (files: MediaFile[]) => void;
+  /** Update the live progress snapshot. */
+  onProgress: (progress: ScanProgress) => void;
+  /** Mark the scan complete. */
+  onDone: () => void;
+  /** Record a fatal scan error. */
+  onError: (message: string) => void;
+  /** Mark the scan cancelled (partial files retained). */
+  onCancelled: () => void;
+  /** Instantly restore files from the on-disk cache (v4 rework). */
+  onRestore: (files: MediaFile[]) => void;
+  /** Apply phase-2 metadata patches to placeholder files in place. */
+  onMetaBatch: (patches: MetaPatch[]) => void;
+}
+
+/**
+ * Reducer-backed scan state. Replaces the `filesRef` + `filesVersion`
+ * counter pair (review issue #1) and adds error/cancel states (#16, #3).
+ */
+export function useScanState(): UseScanStateReturn {
+  const [state, dispatch] = useReducer(scanReducer, initialState);
+
+  // Flatten once per version change. `.flat()` is O(total) but runs only
+  // when a batch landed, not cumulatively inside the reducer on every batch.
+  const files = useMemo(
+    () => state.batches.flat(),
+    [state.filesVersion, state.batches],
+  );
+
+  const onStart = useCallback(() => dispatch({ type: "start" }), []);
+  const onReset = useCallback(() => dispatch({ type: "reset", folder: null }), []);
+
+  // Buffer incoming batches and flush as a single combined batch every
+  // ~150ms. During a fast scan the worker sends 100+ batches in seconds;
+  // dispatching each one immediately triggers 100+ React re-renders, each
+  // recomputing the masonry layout over a progressively larger array —
+  // freezing the UI on large libraries (v5 rework).
+  const batchBufferRef = useRef<MediaFile[]>([]);
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushBatches = useCallback(() => {
+    flushTimerRef.current = null;
+    const buffered = batchBufferRef.current;
+    if (buffered.length === 0) return;
+    batchBufferRef.current = [];
+    dispatch({ type: "batch", files: buffered });
+  }, []);
+  const onBatch = useCallback(
+    (files: MediaFile[]) => {
+      batchBufferRef.current.push(...files);
+      if (flushTimerRef.current) return;
+      flushTimerRef.current = setTimeout(flushBatches, 150);
+    },
+    [flushBatches],
+  );
+  // Flush any pending batches when scan completes so the final state
+  // is immediately consistent.
+  const onDone = useCallback(() => {
+    if (flushTimerRef.current) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    const buffered = batchBufferRef.current;
+    batchBufferRef.current = [];
+    if (buffered.length > 0) dispatch({ type: "batch", files: buffered });
+    dispatch({ type: "done" });
+  }, []);
+
+  const onProgress = useCallback(
+    (progress: ScanProgress) => dispatch({ type: "progress", progress }),
+    [],
+  );
+  const onError = useCallback(
+    (message: string) => dispatch({ type: "error", message }),
+    [],
+  );
+  const onCancelled = useCallback(() => dispatch({ type: "cancelled" }), []);
+  const onRestore = useCallback(
+    (files: MediaFile[]) => dispatch({ type: "restore", files }),
+    [],
+  );
+  const onMetaBatch = useCallback(
+    (patches: MetaPatch[]) => dispatch({ type: "metaBatch", patches }),
+    [],
+  );
+
+  return { state, files, onStart, onReset, onBatch, onProgress, onDone, onError, onCancelled, onRestore, onMetaBatch };
+}
