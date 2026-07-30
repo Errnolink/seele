@@ -71,7 +71,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = ({
       <div
         className={`flex items-center py-1.5 px-3 cursor-pointer border-l-2 transition-all duration-150 gap-1.5 leading-tight text-xs font-mono select-none ${
           isSelected
-            ? "bg-nerv-orange/15 border-nerv-orange text-nerv-amber font-semibold"
+            ? "bg-nerv-orange/15 border-nerv-orange text-nerv-amber font-semibold shadow-[inset_0_0_12px_rgba(255,85,0,0.12)]"
             : "border-transparent hover:bg-nerv-panel-2 hover:shadow-[inset_0_0_8px_rgba(255,85,0,0.1)] text-nerv-text"
         }`}
         style={{ paddingLeft: `${depth * 16 + 12}px` }}
@@ -117,7 +117,15 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = ({
         <span className="flex-1 truncate">{node.name}</span>
         <span
           className={`font-mono text-[10px] flex-shrink-0 px-1.5 py-0.5 ${
-            isSelected ? "text-nerv-amber bg-nerv-orange/20" : "text-nerv-muted bg-nerv-panel-2"
+            isSelected
+              ? "text-nerv-amber bg-nerv-orange/20"
+              : node.count >= 1000
+                ? "text-nerv-orange bg-nerv-panel-2"
+                : node.count >= 100
+                  ? "text-nerv-amber bg-nerv-panel-2"
+                  : node.count >= 10
+                    ? "text-nerv-cyan bg-nerv-panel-2"
+                    : "text-nerv-muted bg-nerv-panel-2"
           }`}
         >
           {node.count}

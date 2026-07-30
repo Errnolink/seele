@@ -170,6 +170,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
     // ── ui state ──
     const [showHints, setShowHints] = useState(true);
     const [showMetadata, setShowMetadata] = useState(true);
+    const [controlsVisible, setControlsVisible] = useState(true);
 
     const isVideo = file.fileType === "video";
     const currentIndex = index ?? 0;
@@ -197,6 +198,22 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
       const timer = setTimeout(() => setShowHints(false), 4000);
       return () => clearTimeout(timer);
     }, [file.filePath]);
+
+    // ── auto-hide chrome (top bar, nav arrows, hints) on mouse idle (UX-17) ──
+    const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => {
+      const onMove = () => {
+        setControlsVisible(true);
+        clearTimeout(hideTimerRef.current!);
+        hideTimerRef.current = setTimeout(() => setControlsVisible(false), 2500);
+      };
+      onMove();
+      window.addEventListener("mousemove", onMove);
+      return () => {
+        window.removeEventListener("mousemove", onMove);
+        clearTimeout(hideTimerRef.current!);
+      };
+    }, []);
 
     // ── scroll filmstrip to active item ──
     useLayoutEffect(() => {
@@ -372,7 +389,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
 
     return (
       <div
-        className="fixed inset-0 z-50 flex flex-col bg-nerv-bg/98 backdrop-blur-sm select-none"
+        className="fixed inset-0 z-50 flex flex-col bg-nerv-bg/98 backdrop-blur-sm select-none animate-viewer-enter"
         onKeyDown={handleKeyDown}
         tabIndex={-1}
       >
@@ -383,7 +400,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
         <CornerTicks size={14} />
 
         {/* ── top bar ── */}
-        <div className="relative z-20 flex items-center justify-between border-b border-nerv-orange/20 bg-nerv-panel/60 px-4 py-2.5 backdrop-blur-sm">
+        <div className={`relative z-20 flex items-center justify-between border-b border-nerv-orange/20 bg-nerv-panel/60 px-4 py-2.5 backdrop-blur-sm transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
           <div className="flex items-center gap-3">
             <span className="font-display text-sm font-bold uppercase tracking-widest text-nerv-orange">
               File Viewer
@@ -434,7 +451,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             <button
               type="button"
               onClick={() => navigate("prev")}
-              className="absolute left-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/80 text-nerv-orange backdrop-blur-sm transition-all hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,85,0,0.2)]"
+              className={`absolute left-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/80 text-nerv-orange backdrop-blur-sm transition-all duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,85,0,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
               title="Previous (←)"
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -480,7 +497,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             <button
               type="button"
               onClick={() => navigate("next")}
-              className="absolute right-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/80 text-nerv-orange backdrop-blur-sm transition-all hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,85,0,0.2)]"
+              className={`absolute right-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/80 text-nerv-orange backdrop-blur-sm transition-all duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,85,0,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
               title="Next (→)"
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>

@@ -27,13 +27,19 @@ function createWindow(): void {
     minWidth: 800,
     minHeight: 600,
     show: false,
+    // Custom frameless titlebar (UX-14). On Windows, `titleBarOverlay`
+    // reserves a small caption area for native min/max/close buttons
+    // overlaying our titlebar, so window controls still work.
+    titleBarStyle: "hidden",
+    titleBarOverlay: {
+      color: "#0a0a0a",
+      symbolColor: "#e0530a",
+      height: 48,
+    },
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      // The preload only uses `contextBridge` + `ipcRenderer`, both of
-      // which work with the sandbox enabled (Electron 20+). Keeping the
-      // sandbox on hardens the renderer (review issue #7).
       sandbox: true,
     },
   });

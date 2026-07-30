@@ -10,6 +10,8 @@ import MediaViewer from "./components/MediaViewer";
 import ContextMenu, { type ContextMenuPosition } from "./components/ContextMenu";
 import { useSfx } from "./sfx/useSfx";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
+import { formatBytes } from "./utils";
+import KeyboardHelp from "./components/KeyboardHelp";
 import { useScanState } from "./hooks/useScanState";
 import type { MediaFile, ScanProgress } from "../scanner/types";
 
@@ -51,6 +53,14 @@ export default function App() {
     file: MediaFile;
     position: ContextMenuPosition;
   } | null>(null);
+  // Drag-and-drop folder feedback overlay (UX-2).
+  const [isDragOver, setIsDragOver] = useState(false);
+  // Collapsible sidebar (UX-3).
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Grid density / thumbnail size control (UX-4).
+  const [gridDensity, setGridDensity] = useState(180);
+  // Keyboard help panel (UX-9).
+  const [showHelp, setShowHelp] = useState(false);
 
   // Debounce the search query so the heavy filter useMemo doesn't run on
   // every keystroke (review issue #24).
@@ -279,6 +289,11 @@ export default function App() {
         );
         input?.focus();
       }
+      // ? — toggle keyboard help panel (UX-9).
+      if (e.key === "?" || (e.shiftKey && e.key === "/")) {
+        setShowHelp((s) => !s);
+        return;
+      }
       // Escape — clear search, else clear folder selection.
       // Defer to MediaViewer when the viewer is open so Escape doesn't
       // double-fire (close viewer AND clear search) — v3 review #11.
@@ -439,6 +454,19 @@ export default function App() {
     };
   }, [files, debouncedQuery, selectedFolder, groupMode, sortMode, sortDir]);
 
+  // Summary stats for the status bar (UX-8).
+  const stats = useMemo(() => {
+    let images = 0;
+    let videos = 0;
+    let totalBytes = 0;
+    for (const f of files) {
+      if (f.fileType === "video") videos++;
+      else images++;
+      totalBytes += f.sizeBytes;
+    }
+    return { images, videos, totalBytes };
+  }, [files]);
+
   // Media viewer (lightbox) handlers — v2 review #3.
   // Index arrives from the grid (absolute tile index), avoiding an O(n)
   // findIndex on every click (v3 review #5).
@@ -461,17 +489,20 @@ export default function App() {
       {
         key: "open-default",
         label: "Open with default app",
+        icon: <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M8 5v14l11-7z" /></svg>,
         onClick: () => void window.scanAPI.openPath(file.filePath),
       },
       {
         key: "show-in-folder",
         label: "Show in file manager",
+        icon: <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>,
         onClick: () => void window.scanAPI.showItemInFolder(file.filePath),
       },
       { key: "div1", label: undefined },
       {
         key: "open-viewer",
         label: "Open in viewer",
+        icon: <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="3" /><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" /></svg>,
         onClick: () => {
           const idx = derivedFiles.findIndex(
             (f) => f.filePath === file.filePath,
@@ -483,11 +514,13 @@ export default function App() {
       {
         key: "copy-path",
         label: "Copy file path",
+        icon: <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>,
         onClick: () => void window.scanAPI.writeClipboard(file.filePath),
       },
       {
         key: "copy-name",
         label: "Copy file name",
+        icon: <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M4 7V4h16v3M9 20h6M12 4v16" /></svg>,
         onClick: () => void window.scanAPI.writeClipboard(file.fileName),
       },
     ];
@@ -522,18 +555,46 @@ export default function App() {
   return (
     <div
       className="flex flex-col h-screen w-screen overflow-hidden bg-nerv-bg text-nerv-text font-mono relative z-10 box-border"
+      onDragEnter={(e) => {
+        if (e.dataTransfer?.types?.includes("Files")) {
+          e.preventDefault();
+          setIsDragOver(true);
+        }
+      }}
       onDragOver={(e) => {
         if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
       }}
-      onDrop={handleDrop}
+      onDragLeave={(e) => {
+        if (e.dataTransfer?.types?.includes("Files") && e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+          setIsDragOver(false);
+        }
+      }}
+      onDrop={(e) => {
+        setIsDragOver(false);
+        handleDrop(e);
+      }}
     >
       <HexGridOverlay />
       <BootSequence durationMs={import.meta.env.DEV ? 0 : 600} />
 
+      {/* Drag-and-drop overlay (UX-2) */}
+      {isDragOver && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-nerv-bg/90 backdrop-blur-sm border-2 border-dashed border-nerv-orange pointer-events-none">
+          <div className="flex flex-col items-center gap-3 animate-pulse">
+            <svg viewBox="0 0 24 24" width="72" height="72" fill="none" stroke="currentColor" strokeWidth={1.5} className="text-nerv-orange">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+            <span className="font-display text-lg uppercase tracking-widest text-nerv-amber font-bold">
+              Drop Folder to Scan
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* ── Top app bar ─────────────────────────────────────────── */}
-      <header className="relative z-20 flex flex-col flex-shrink-0 border-b border-nerv-border/60 bg-nerv-panel/40 backdrop-blur-sm">
+      <header className="titlebar-drag relative z-20 flex flex-col flex-shrink-0 border-b border-nerv-border/60 bg-nerv-panel/40 backdrop-blur-sm">
         {/* Row 1 — wordmark + actions + search */}
-        <div className="flex items-center gap-3 px-4 h-12">
+        <div className="no-drag flex items-center gap-3 px-4 h-12">
           {/* Wordmark */}
           <div className="flex items-center gap-2 flex-shrink-0 pr-3 border-r border-nerv-border/60 h-full">
             <span className="w-2 h-2 bg-nerv-orange animate-blink flex-shrink-0" />
@@ -603,6 +664,26 @@ export default function App() {
               onModeChange={handleSortModeChange}
               onDirChange={handleSortDirChange}
             />
+
+            {/* Grid density slider (UX-4) */}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <svg className="w-3 h-3 text-nerv-muted" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" />
+                <rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" />
+              </svg>
+              <input
+                type="range"
+                min={100}
+                max={400}
+                value={gridDensity}
+                onChange={(e) => setGridDensity(Number(e.target.value))}
+                className="w-20 h-1 accent-nerv-orange"
+                title="Thumbnail size"
+              />
+              <svg className="w-4 h-4 text-nerv-muted" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="2" y="2" width="20" height="20" rx="1" />
+              </svg>
+            </div>
           </div>
         </div>
 
@@ -638,17 +719,33 @@ export default function App() {
                   )}
                 </>
               ) : (
-                <span
-                  className={`font-semibold tracking-wider ${
-                    scan.status === "done" ? "text-nerv-green" : "text-nerv-amber"
-                  }`}
-                >
-                  {scan.status === "done"
-                    ? `SCAN COMPLETE · ${scan.count.toLocaleString()} FILES`
-                    : scan.status === "cancelled"
-                      ? `CANCELLED · ${scan.count.toLocaleString()} FILES`
-                      : "SCAN FAILED"}
-                </span>
+                <>
+                  <span
+                    className={`font-semibold tracking-wider ${
+                      scan.status === "done" ? "text-nerv-green" : "text-nerv-amber"
+                    }`}
+                  >
+                    {scan.status === "done"
+                      ? `SCAN COMPLETE · ${scan.count.toLocaleString()} FILES`
+                      : scan.status === "cancelled"
+                        ? `CANCELLED · ${scan.count.toLocaleString()} FILES`
+                        : "SCAN FAILED"}
+                  </span>
+                  {scan.status === "done" && (
+                    <>
+                      <span className="text-nerv-muted/40">|</span>
+                      <span className="text-nerv-cyan text-[10px]">
+                        {stats.images.toLocaleString()} images
+                      </span>
+                      <span className="text-nerv-green text-[10px]">
+                        {stats.videos.toLocaleString()} videos
+                      </span>
+                      <span className="text-nerv-muted text-[10px]">
+                        {formatBytes(stats.totalBytes)}
+                      </span>
+                    </>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -671,8 +768,21 @@ export default function App() {
 
       {/* ── Body: sidebar + main ───────────────────────────────── */}
       <div className="flex flex-1 min-h-0 relative z-10">
+        {/* Sidebar collapse toggle (UX-3) */}
+        <button
+          type="button"
+          onClick={() => setSidebarOpen((s) => !s)}
+          className="absolute top-1/2 -translate-y-1/2 z-30 w-5 h-10 bg-nerv-panel border border-nerv-border/60 flex items-center justify-center text-nerv-muted hover:text-nerv-orange hover:border-nerv-orange/50 transition-all cursor-pointer"
+          style={{ left: sidebarOpen ? "240px" : "0" }}
+          title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+        >
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path d={sidebarOpen ? "M15 18l-6-6 6-6" : "M9 18l6-6-6-6"} />
+          </svg>
+        </button>
+
         {/* Sidebar */}
-        <aside className="w-[240px] min-w-[240px] max-w-[240px] h-full flex-shrink-0 border-r border-nerv-border/60 bg-nerv-panel/20 overflow-hidden flex flex-col">
+        <aside className={`${sidebarOpen ? "w-[240px] min-w-[240px]" : "w-0 min-w-0"} h-full flex-shrink-0 border-r border-nerv-border/60 bg-nerv-panel/20 overflow-hidden flex flex-col transition-all duration-200`}>
           <div className="flex items-center justify-between px-3 h-8 border-b border-nerv-border/40 flex-shrink-0">
             <span className="text-[10px] uppercase tracking-widest text-nerv-muted font-bold">
               Navigation
@@ -740,6 +850,7 @@ export default function App() {
               onThumbnailClick={openViewer}
               onThumbnailContextMenu={handleThumbnailContextMenu}
               onDimensionsMeasured={handleDimensionsMeasured}
+              targetColumnWidth={gridDensity}
             />
           )}
         </main>
@@ -765,6 +876,9 @@ export default function App() {
           onClose={() => setContextMenu(null)}
         />
       )}
+
+      {/* Keyboard help panel (UX-9) */}
+      {showHelp && <KeyboardHelp onClose={() => setShowHelp(false)} />}
     </div>
   );
 }

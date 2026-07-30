@@ -35,6 +35,8 @@
   --animate-blink: blink 1s steps(2, start) infinite;
   --animate-boot-glitch: matrix-glitch 0.5s steps(3, end);
   --animate-scanline-bar: scanline-bar 1.4s ease-in-out infinite;
+  --animate-nerv-shimmer: nerv-shimmer 1.8s ease-in-out infinite;
+  --animate-viewer-enter: viewer-enter 0.2s ease-out;
 }
 
 /* ---- keyframes ---- */
@@ -101,5 +103,25 @@
   }
   100% {
     transform: translateX(400%);
+  }
+}
+
+@keyframes nerv-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes viewer-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
   }
 }

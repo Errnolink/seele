@@ -69,7 +69,7 @@ export const Thumbnail: React.FC<ThumbnailProps> = memo(
 
     return (
       <div
-        className={`relative flex flex-col bg-nerv-bg overflow-hidden select-none flex-shrink-0 group ring-1 ring-nerv-border/40 hover:ring-2 hover:ring-nerv-orange transition-all duration-150 ${
+        className={`relative flex flex-col bg-nerv-bg overflow-hidden select-none flex-shrink-0 group ring-1 ring-nerv-border/40 hover:ring-2 hover:ring-nerv-orange hover:shadow-[0_0_12px_rgba(255,85,0,0.15)] transition-all duration-150 ${
           errored ? "cursor-not-allowed" : "cursor-pointer"
         }`}
         style={{ width: `${width}px`, height: `${height}px` }}
@@ -88,7 +88,14 @@ export const Thumbnail: React.FC<ThumbnailProps> = memo(
         <div className="relative w-full h-full bg-nerv-bg flex items-center justify-center overflow-hidden">
           {/* Loading skeleton (review issue #25) */}
           {!loaded && !errored && (
-            <div className="absolute inset-0 bg-nerv-panel-2 animate-pulse" />
+            <div
+              className="absolute inset-0 animate-nerv-shimmer"
+              style={{
+                background:
+                  "linear-gradient(90deg, #1c1d26 25%, rgba(255,85,0,0.08) 50%, #1c1d26 75%)",
+                backgroundSize: "200% 100%",
+              }}
+            />
           )}
 
           {/* Error fallback (review issue #25) */}
@@ -119,7 +126,7 @@ export const Thumbnail: React.FC<ThumbnailProps> = memo(
                 muted
                 onLoadedData={handleLoadedData}
                 onError={() => setErrored(true)}
-                className={`w-full h-full object-cover block ${loaded ? "" : "opacity-0"}`}
+                className={`w-full h-full object-cover block transition-opacity duration-300 ${loaded ? "opacity-100" : "opacity-0"}`}
               />
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <div className="w-9 h-9 rounded-full bg-black/60 border border-nerv-green/50 flex items-center justify-center text-nerv-green group-hover:scale-110 transition-transform">
@@ -142,7 +149,7 @@ export const Thumbnail: React.FC<ThumbnailProps> = memo(
                 if (nw > 0 && nh > 0) onDimensions?.(file.filePath, nw, nh);
               }}
               onError={() => setErrored(true)}
-              className={`w-full h-full object-cover block ${loaded ? "" : "opacity-0"}`}
+              className={`w-full h-full object-cover block transition-opacity duration-300 ${loaded ? "opacity-100" : "opacity-0"}`}
             />
           ) : null}
 

@@ -27,6 +27,8 @@ export interface VirtualizedGridProps {
    * map (rAF-batched) and reflows only when dimensions change.
    */
   onDimensionsMeasured?: (filePath: string, width: number, height: number) => void;
+  /** User-controlled thumbnail size (UX-4). Defaults to 180. */
+  targetColumnWidth?: number;
 }
 
 /** Fallback aspect ratio for files without known dimensions (videos, errors). */
@@ -52,9 +54,7 @@ interface Section {
   /** Y offset of this section from the top of the scroll content. */
   offsetY: number;
 }
-
 const HEADER_HEIGHT = 32;
-const TARGET_COLUMN_WIDTH = 180;
 const MIN_COLUMN_WIDTH = 140;
 const GAP = 10;
 const PADDING = 16;
@@ -76,6 +76,7 @@ export const VirtualizedGrid: React.FC<VirtualizedGridProps> = ({
   onThumbnailClick,
   onThumbnailContextMenu,
   onDimensionsMeasured,
+  targetColumnWidth = 180,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -166,7 +167,7 @@ export const VirtualizedGrid: React.FC<VirtualizedGridProps> = ({
     const availableWidth = containerWidth - PADDING * 2;
     const columnCount = Math.max(
       1,
-      Math.floor((availableWidth + GAP) / (TARGET_COLUMN_WIDTH + GAP)),
+      Math.floor((availableWidth + GAP) / (targetColumnWidth + GAP)),
     );
     const columnWidth = Math.max(
       MIN_COLUMN_WIDTH,
@@ -256,7 +257,7 @@ export const VirtualizedGrid: React.FC<VirtualizedGridProps> = ({
     }
 
     return { sections, totalHeight: cursorY };
-  }, [files, groupHeaders, containerWidth, dimVersion]);
+  }, [files, groupHeaders, containerWidth, dimVersion, targetColumnWidth]);
 
   // ── Visible window ─────────────────────────────────────────────
   const visibleTiles = useMemo(() => {
@@ -358,6 +359,20 @@ export const VirtualizedGrid: React.FC<VirtualizedGridProps> = ({
           </div>
         ))}
       </div>
+
+      {/* Scroll-to-top button (UX-5) — fixed position so it overlays the viewport. */}
+      {scrollTop > viewportHeight && (
+        <button
+          type="button"
+          onClick={() => scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
+          className="fixed bottom-6 right-6 z-40 w-10 h-10 bg-nerv-panel border border-nerv-orange/40 flex items-center justify-center text-nerv-orange hover:bg-nerv-orange/10 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,85,0,0.2)] transition-all backdrop-blur-sm"
+          title="Scroll to top"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path d="M18 15l-6-6-6 6" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 };
