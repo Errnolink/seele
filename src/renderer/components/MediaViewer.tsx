@@ -409,7 +409,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
         <CornerTicks size={14} />
 
         {/* ── top bar ── */}
-        <div className={`titlebar-drag relative z-20 flex items-center justify-between border-b border-nerv-orange/20 bg-nerv-panel py-2.5 pl-4 pr-[150px] transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+        <div className={`titlebar-drag relative z-20 flex items-center justify-between border-b border-nerv-orange/20 bg-nerv-panel py-2.5 pl-4 transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`} style={{ paddingRight: "150px" }}>
           <div className="flex items-center gap-3">
             <span className="font-display text-sm font-bold uppercase tracking-widest text-nerv-orange">
               File Viewer
