@@ -409,7 +409,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
         <CornerTicks size={14} />
 
         {/* ── top bar ── */}
-        <div className={`relative z-20 flex items-center justify-between border-b border-nerv-orange/20 bg-nerv-panel px-4 py-2.5 transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+        <div className={`titlebar-drag relative z-20 flex items-center justify-between border-b border-nerv-orange/20 bg-nerv-panel py-2.5 pl-4 pr-[150px] transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
           <div className="flex items-center gap-3">
             <span className="font-display text-sm font-bold uppercase tracking-widest text-nerv-orange">
               File Viewer
@@ -421,7 +421,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="no-drag flex items-center gap-3">
             {/* zoom indicator (images only) */}
             {!isVideo && (
               <span className="font-mono text-[10px] text-nerv-muted">

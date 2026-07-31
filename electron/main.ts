@@ -154,12 +154,40 @@ function messageStringField(msg: unknown, field: string): string | undefined {
 }
 
 /** PERF: LRU cache for downscaled images so scrolling back doesn't
- * re-decode the source. Keyed on `${path}?w=${w}`. */
+ * re-decode the source. Keyed on `${path}?w=${w}`.
+ * 150 entries caps memory at ~30MB (thumbnail tier) / ~60MB (viewer tier)
+ * — the previous 500 entries could hold ~200MB of JPEG buffers alone. */
 const thumbCache = new Map<string, Uint8Array>();
-const THUMB_CACHE_MAX = 500;
+const THUMB_CACHE_MAX = 150;
+
+/** Limit concurrent sharp operations. Without this, a grid of 50
+ * visible tiles fires 50 parallel libvips decodes — each allocates its
+ * own thread pool + intermediate buffers, spiking CPU to 100% and RAM
+ * by hundreds of MB. A semaphore of 4 keeps decode latency low while
+ * bounding resource use. */
+const sharpQueue: (() => void)[] = [];
+let sharpActive = 0;
+const SHARP_CONCURRENCY = 4;
+function withSharpLimit<T>(fn: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const run = () => {
+      sharpActive++;
+      fn()
+        .then(resolve, reject)
+        .finally(() => {
+          sharpActive--;
+          const next = sharpQueue.shift();
+          if (next) next();
+        });
+    };
+    if (sharpActive < SHARP_CONCURRENCY) run();
+    else sharpQueue.push(run);
+  });
+}
 
 // sharp decodes off the main thread via libvips worker threads — no
-// event-loop blocking, ~5MB peak vs nativeImage's full-res bitmap.
+// event-loop blocking, ~5MB peak per decode vs nativeImage's full-res
+// bitmap.
 
 
 /** Downscale `requested` to width `w` and return a JPEG Response, or null
@@ -188,11 +216,13 @@ async function serveResized(
     if (stat.size > 64 * 1024 * 1024) return null;
     // sharp's streaming decoder never holds the full-res bitmap in JS
     // heap; libvips downsamples on the fly via a pixel pipe.
-    const jpeg = await sharp(requested, { sequentialRead: true })
-      .rotate() // honor EXIF orientation
-      .resize({ width: w, withoutEnlargement: true })
-      .jpeg({ quality: 80, mozjpeg: true })
-      .toBuffer();
+    const jpeg = await withSharpLimit(() =>
+      sharp(requested, { sequentialRead: true })
+        .rotate() // honor EXIF orientation
+        .resize({ width: w, withoutEnlargement: true })
+        .jpeg({ quality: 80, mozjpeg: true })
+        .toBuffer(),
+    );
     const bytes = new Uint8Array(jpeg);
     thumbCache.set(cacheKey, bytes);
     if (thumbCache.size > THUMB_CACHE_MAX) {
