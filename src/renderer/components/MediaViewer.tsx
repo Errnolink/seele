@@ -13,7 +13,8 @@ function toMediaUrl(filePath: string): string {
 }
 
 /** Build a downscaled `media://` URL for small thumbnails (filmstrip).
- *  The main process resizes via nativeImage when `?w=` is present. */
+ *  The main process resizes via sharp (async, off-thread) when `?w=` is
+ *  present; without it the raw file is streamed. */
 function toThumbUrl(filePath: string, width = 112): string {
   return `${toMediaUrl(filePath)}?w=${width}`;
 }
@@ -376,8 +377,16 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
       (dir: "prev" | "next") => onNavigate?.(dir),
       [onNavigate],
     );
-
-    const mediaUrl = React.useMemo(() => toMediaUrl(file.filePath), [file.filePath]);
+    // Two-tier loading: when fit-to-screen (zoom===1) request a 2560px
+    // preview — a 9000px source decodes as a 2560px bitmap (~15MB) not
+    // the full ~250MB. Only when the user zooms in do we load the raw
+    // file so the transform reveals real detail.
+    const VIEWER_PREVIEW_W = 2560;
+    const mediaUrl = React.useMemo(() => {
+      const base = toMediaUrl(file.filePath);
+      if (isVideo || zoom > 1) return base;
+      return `${base}?w=${VIEWER_PREVIEW_W}`;
+    }, [file.filePath, isVideo, zoom]);
 
     const cursorClass = isVideo
       ? ""

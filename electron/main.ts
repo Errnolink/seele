@@ -5,11 +5,11 @@ import {
   dialog,
   protocol,
   net,
-  nativeImage,
   utilityProcess,
   shell,
   clipboard,
 } from "electron";
+import sharp from "sharp";
 import path from "node:path";
 import fs from "node:fs";
 import { once } from "node:events";
@@ -153,10 +153,64 @@ function messageStringField(msg: unknown, field: string): string | undefined {
   return undefined;
 }
 
-/** PERF-2: LRU cache for downscaled thumbnails so scrolling back doesn't
- * re-decode the source image. Keyed on `${path}?w=${w}`. */
+/** PERF: LRU cache for downscaled images so scrolling back doesn't
+ * re-decode the source. Keyed on `${path}?w=${w}`. */
 const thumbCache = new Map<string, Uint8Array>();
 const THUMB_CACHE_MAX = 500;
+
+// sharp decodes off the main thread via libvips worker threads — no
+// event-loop blocking, ~5MB peak vs nativeImage's full-res bitmap.
+
+
+/** Downscale `requested` to width `w` and return a JPEG Response, or null
+ * to signal the caller to fall back to the raw stream. Results are LRU
+ * cached. Replaced the old nativeImage path (sync, full-res bitmap decode
+ * on the main thread → froze the UI on large images). */
+async function serveResized(
+  requested: string,
+  w: number,
+): Promise<Response | null> {
+  const cacheKey = `${requested}?w=${w}`;
+  const cached = thumbCache.get(cacheKey);
+  if (cached) {
+    thumbCache.delete(cacheKey);
+    thumbCache.set(cacheKey, cached); // LRU bump.
+    return new Response(cached as unknown as BodyInit, {
+      headers: {
+        "Content-Type": "image/jpeg",
+        "Cache-Control": "public, max-age=86400",
+      },
+    });
+  }
+  try {
+    // Skip huge raws to bound memory/time — serve them as a stream.
+    const stat = await fs.promises.stat(requested);
+    if (stat.size > 64 * 1024 * 1024) return null;
+    // sharp's streaming decoder never holds the full-res bitmap in JS
+    // heap; libvips downsamples on the fly via a pixel pipe.
+    const jpeg = await sharp(requested, { sequentialRead: true })
+      .rotate() // honor EXIF orientation
+      .resize({ width: w, withoutEnlargement: true })
+      .jpeg({ quality: 80, mozjpeg: true })
+      .toBuffer();
+    const bytes = new Uint8Array(jpeg);
+    thumbCache.set(cacheKey, bytes);
+    if (thumbCache.size > THUMB_CACHE_MAX) {
+      const oldest = thumbCache.keys().next().value;
+      if (oldest !== undefined) thumbCache.delete(oldest);
+    }
+    return new Response(bytes as unknown as BodyInit, {
+      headers: {
+        "Content-Type": "image/jpeg",
+        "Cache-Control": "public, max-age=86400",
+      },
+    });
+  } catch (e) {
+    // Unsupported format / corrupt file → fall back to raw stream.
+    if (!app.isPackaged) console.debug("[media] resize failed:", e);
+    return null;
+  }
+}
 
 app.whenReady().then(() => {
   protocol.handle("media", async (request) => {
@@ -190,46 +244,11 @@ app.whenReady().then(() => {
     const targetWidth = url.searchParams.get("w");
     if (targetWidth) {
       const w = parseInt(targetWidth, 10);
-      if (Number.isFinite(w) && w > 0 && w <= 512) {
-        const cacheKey = `${requested}?w=${w}`;
-        const cached = thumbCache.get(cacheKey);
-        if (cached) {
-          // LRU bump.
-          thumbCache.delete(cacheKey);
-          thumbCache.set(cacheKey, cached);
-          return new Response(cached as unknown as BodyInit, {
-            headers: {
-              "Content-Type": "image/jpeg",
-              "Cache-Control": "public, max-age=86400",
-            },
-          });
-        }
-        try {
-          // PERF-2: skip downscaling for files > 50 MB to prevent OOM/DoS.
-          const stat = await fs.promises.stat(requested);
-          if (stat.size > 50 * 1024 * 1024) {
-            return net.fetch(pathToFileUrl(requested));
-          }
-          const buf = await fs.promises.readFile(requested);
-          const img = nativeImage.createFromBuffer(buf);
-          const resized = img.resize({ width: w, quality: "good" });
-          const jpeg = new Uint8Array(resized.toJPEG(75));
-          thumbCache.set(cacheKey, jpeg);
-          if (thumbCache.size > THUMB_CACHE_MAX) {
-            const oldest = thumbCache.keys().next().value;
-            if (oldest !== undefined) thumbCache.delete(oldest);
-          }
-          return new Response(jpeg as unknown as BodyInit, {
-            headers: {
-              "Content-Type": "image/jpeg",
-              "Cache-Control": "public, max-age=86400",
-            },
-          });
-        } catch (e) {
-          // Resize failed (corrupt image / unsupported format) —
-          // fall through to serving the raw file.
-          if (!app.isPackaged) console.debug("[media] resize failed:", e);
-        }
+      // Grid thumbnails (≤512) and viewer preview tier (≤2560) are both
+      // served downscaled; anything else falls through to the raw file.
+      if (Number.isFinite(w) && w > 0 && w <= 2560) {
+        const resized = await serveResized(requested, w);
+        if (resized) return resized;
       }
     }
 
