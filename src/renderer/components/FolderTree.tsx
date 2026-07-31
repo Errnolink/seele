@@ -53,7 +53,7 @@ interface TreeNodeRowProps {
   onToggleExpand: (normPath: string, e: React.MouseEvent) => void;
   onSelect: (path: string) => void;
 }
-const TreeNodeRow: React.FC<TreeNodeRowProps> = ({
+const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(({
   node,
   depth,
   normSelectedFolder,
@@ -147,9 +147,10 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = ({
         ))}
     </>
   );
-};
+});
+TreeNodeRow.displayName = "TreeNodeRow";
 
-export const FolderTree: React.FC<FolderTreeProps> = ({
+export const FolderTree: React.FC<FolderTreeProps> = React.memo(({
   files,
   filesVersion,
   rootPath,
@@ -332,7 +333,7 @@ export const FolderTree: React.FC<FolderTreeProps> = ({
         <div className="flex items-center gap-1 px-3 py-1 border-b border-nerv-border/40 mb-1">
           <button
             type="button"
-            className="px-1.5 py-0.5 text-[9px] font-mono uppercase text-nerv-muted hover:text-nerv-cyan border border-transparent hover:border-nerv-cyan/40 transition-colors cursor-pointer"
+            className="px-1.5 py-0.5 text-[10px] font-mono uppercase text-nerv-muted hover:text-nerv-cyan border border-transparent hover:border-nerv-cyan/40 transition-colors cursor-pointer"
             onClick={handleExpandAll}
             title="Expand all folders"
           >
@@ -340,7 +341,7 @@ export const FolderTree: React.FC<FolderTreeProps> = ({
           </button>
           <button
             type="button"
-            className="px-1.5 py-0.5 text-[9px] font-mono uppercase text-nerv-muted hover:text-nerv-cyan border border-transparent hover:border-nerv-cyan/40 transition-colors cursor-pointer"
+            className="px-1.5 py-0.5 text-[10px] font-mono uppercase text-nerv-muted hover:text-nerv-cyan border border-transparent hover:border-nerv-cyan/40 transition-colors cursor-pointer"
             onClick={handleCollapseAll}
             title="Collapse all folders"
           >
@@ -402,7 +403,8 @@ export const FolderTree: React.FC<FolderTreeProps> = ({
       </div>
     </aside>
   );
-};
+});
+FolderTree.displayName = "FolderTree";
 
 export default FolderTree;
 

@@ -12,6 +12,12 @@ function toMediaUrl(filePath: string): string {
     : `media://local/${encodeURIComponent(filePath)}`;
 }
 
+/** Build a downscaled `media://` URL for small thumbnails (filmstrip).
+ *  The main process resizes via nativeImage when `?w=` is present. */
+function toThumbUrl(filePath: string, width = 112): string {
+  return `${toMediaUrl(filePath)}?w=${width}`;
+}
+
 export interface MediaViewerProps {
   /** The file to display. */
   file: MediaFile;
@@ -42,12 +48,6 @@ function formatDate(input: string | number | undefined): string {
   });
 }
 
-/** Extract a short relative path for display (last 2 segments). */
-function shortPath(fullPath: string): string {
-  const parts = fullPath.replace(/\\/g, "/").split("/").filter(Boolean);
-  if (parts.length <= 2) return fullPath;
-  return "…/" + parts.slice(-2).join("/");
-}
 
 // ─── zoom / pan helpers ──────────────────────────────────────────────
 const MIN_ZOOM = 1;
@@ -73,7 +73,7 @@ interface FilmstripThumbProps {
 
 const FilmstripThumb: React.FC<FilmstripThumbProps> = memo(
   ({ file, active, onClick }) => {
-    const thumbUrl = React.useMemo(() => toMediaUrl(file.filePath), [file.filePath]);
+    const thumbUrl = React.useMemo(() => toThumbUrl(file.filePath), [file.filePath]);
     const isVideo = file.fileType === "video";
 
     return (
@@ -136,7 +136,7 @@ function MetaItem({
           : "text-nerv-text";
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="text-[9px] uppercase tracking-widest text-nerv-muted">
+      <span className="text-[10px] uppercase tracking-widest text-nerv-muted">
         {label}
       </span>
       <span className={`text-xs font-mono ${toneClass}`}>{value}</span>
@@ -389,7 +389,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
 
     return (
       <div
-        className="fixed inset-0 z-50 flex flex-col bg-nerv-bg/98 backdrop-blur-sm select-none animate-viewer-enter"
+        className="fixed inset-0 z-50 flex flex-col bg-nerv-bg select-none animate-viewer-enter"
         onKeyDown={handleKeyDown}
         tabIndex={-1}
       >
@@ -400,7 +400,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
         <CornerTicks size={14} />
 
         {/* ── top bar ── */}
-        <div className={`relative z-20 flex items-center justify-between border-b border-nerv-orange/20 bg-nerv-panel/60 px-4 py-2.5 backdrop-blur-sm transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+        <div className={`relative z-20 flex items-center justify-between border-b border-nerv-orange/20 bg-nerv-panel px-4 py-2.5 transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
           <div className="flex items-center gap-3">
             <span className="font-display text-sm font-bold uppercase tracking-widest text-nerv-orange">
               File Viewer
@@ -451,7 +451,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             <button
               type="button"
               onClick={() => navigate("prev")}
-              className={`absolute left-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/80 text-nerv-orange backdrop-blur-sm transition-all duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,85,0,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
+              className={`absolute left-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-all duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,85,0,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
               title="Previous (←)"
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -477,12 +477,14 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
               />
             ) : (
               <img
+                key={file.filePath}
                 src={mediaUrl}
                 alt={file.fileName}
+                decoding="async"
                 draggable={false}
                 onClick={handleImageClick}
                 onMouseDown={handleMouseDown}
-                className={`max-h-[78vh] max-w-[82vw] transition-transform duration-100 ${cursorClass}`}
+                className={`max-h-[78vh] max-w-[82vw] ${cursorClass}`}
                 style={{
                   transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
                   transformOrigin: "center",
@@ -497,7 +499,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             <button
               type="button"
               onClick={() => navigate("next")}
-              className={`absolute right-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/80 text-nerv-orange backdrop-blur-sm transition-all duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,85,0,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
+              className={`absolute right-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-all duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,85,0,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
               title="Next (→)"
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -508,7 +510,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
 
           {/* keyboard hints overlay */}
           {showHints && (
-            <div className="pointer-events-none absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 border border-nerv-border/60 bg-nerv-panel/80 px-3 py-1.5 backdrop-blur-sm">
+            <div className="pointer-events-none absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 border border-nerv-border/60 bg-nerv-panel/90 px-3 py-1.5">
               <Hint keys="←/→" label="Navigate" />
               <Divider />
               {!isVideo && <Hint keys="+/-/0" label="Zoom" />}
@@ -522,7 +524,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
 
         {/* ── metadata panel (collapsible) ── */}
         {showMetadata && (
-          <div className="relative z-20 flex items-stretch border-t border-nerv-orange/20 bg-nerv-panel/60 backdrop-blur-sm">
+          <div className="relative z-20 flex items-stretch border-t border-nerv-orange/20 bg-nerv-panel/90">
             <div className="flex flex-1 flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2.5">
               <MetaItem
                 label="File"
@@ -551,23 +553,60 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
           </div>
         )}
 
-        {/* ── filmstrip ── */}
+        {/* ── filmstrip (windowed — only render thumbs near current index) ── */}
         {totalCount > 1 && (
-          <div className="relative z-20 border-t border-nerv-orange/20 bg-nerv-panel/40 backdrop-blur-sm">
+          <div className="relative z-20 border-t border-nerv-orange/20 bg-nerv-panel/40">
             <div
               ref={filmstripRef}
               className="flex items-center gap-1.5 overflow-x-auto px-3 py-2"
               style={{ scrollbarWidth: "thin" }}
             >
-              {files?.map((f, i) => (
-                <FilmstripThumb
-                  key={`${f.filePath}-${i}`}
-                  file={f}
-                  index={i}
-                  active={i === currentIndex}
-                  onClick={() => navigateTo(i)}
-                />
-              ))}
+              {(() => {
+                const thumbs: React.ReactNode[] = [];
+                // Window of ±50 around current index to avoid decoding
+                // thousands of full-res images at once.
+                const WIN = 50;
+                const start = Math.max(0, currentIndex - WIN);
+                const end = Math.min(totalCount, currentIndex + WIN + 1);
+
+                // Leading spacer to preserve scroll position.
+                if (start > 0) {
+                  thumbs.push(
+                    <div
+                      key="spacer-lead"
+                      style={{ width: `${start * (56 + 6)}px`, flexShrink: 0 }}
+                    />,
+                  );
+                }
+
+                for (let i = start; i < end; i++) {
+                  const f = files![i];
+                  thumbs.push(
+                    <FilmstripThumb
+                      key={`${f.filePath}-${i}`}
+                      file={f}
+                      index={i}
+                      active={i === currentIndex}
+                      onClick={() => navigateTo(i)}
+                    />,
+                  );
+                }
+
+                // Trailing spacer.
+                if (end < totalCount) {
+                  thumbs.push(
+                    <div
+                      key="spacer-trail"
+                      style={{
+                        width: `${(totalCount - end) * (56 + 6)}px`,
+                        flexShrink: 0,
+                      }}
+                    />
+                  );
+                }
+
+                return thumbs;
+              })()}
             </div>
           </div>
         )}

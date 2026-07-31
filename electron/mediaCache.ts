@@ -68,7 +68,9 @@ function load(): void {
       files: Array.isArray(parsed.files) ? parsed.files : [],
       dims: parsed.dims ?? {},
     };
-  } catch {
+  } catch (e) {
+    // Corrupt or missing cache — start fresh.
+    if (process.env.NODE_ENV !== "production") console.debug("[mediaCache] load failed:", e);
     cache = { folder: "", files: [], dims: {} };
   }
   rebuildIndex();
@@ -79,14 +81,21 @@ function load(): void {
  * during scrolling (v4 review H-6). Errors are logged, not swallowed
  * silently (v4 review L-2). */
 async function persist(): Promise<void> {
+  if (!dirty) return;
+  // CORR-2: Clear dirty and snapshot synchronously BEFORE awaiting I/O.
+  // Setting dirty=false after the await overwrites a dirty=true set by
+  // an update that arrived during the write, silently losing data.
+  dirty = false;
+  const snapshot = JSON.stringify(cache);
   try {
     const p = ensurePath();
     await fs.promises.mkdir(path.dirname(p), { recursive: true });
     const tmp = `${p}.tmp`;
-    await fs.promises.writeFile(tmp, JSON.stringify(cache), "utf-8");
+    await fs.promises.writeFile(tmp, snapshot, "utf-8");
     await fs.promises.rename(tmp, p);
-    dirty = false;
   } catch (e) {
+    // Restore dirty so the next flush retries.
+    dirty = true;
     console.warn("mediaCache persist failed:", e);
   }
 }

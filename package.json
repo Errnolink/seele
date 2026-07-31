@@ -13,12 +13,13 @@
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.node.json",
     "build": "npm run build:electron && npm run build:renderer",
-    "start": "electron ."
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write \"**/*.{ts,tsx,css,md}\"",
+    "test": "vitest"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@fontsource/orbitron": "^5.3.0",
-    "@tanstack/react-virtual": "^3.14.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

@@ -24,6 +24,7 @@ export const GroupControls: React.FC<GroupControlsProps> = ({ mode, onChange }) 
         <button
           key={option.mode}
           type="button"
+          aria-pressed={mode === option.mode}
           className={`px-2.5 py-1 font-mono uppercase tracking-wider text-xs transition-all duration-150 cursor-pointer ${
             mode === option.mode
               ? "bg-nerv-orange text-nerv-bg font-bold animate-pulse-glow"

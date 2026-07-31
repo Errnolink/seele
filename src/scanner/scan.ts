@@ -77,7 +77,8 @@ function enumerateDirectory(
   let entries: Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
+  } catch (e) {
+    if (process.env.NODE_ENV !== "production") console.debug("[scan] readdir failed:", dir, e);
     return { files, subDirs };
   }
 
@@ -86,7 +87,22 @@ function enumerateDirectory(
       subDirs.push(path.join(dir, entry.name));
       continue;
     }
-    if (!entry.isFile()) continue;
+    // CORR-3: Symlinks return false for both isDirectory() and isFile()
+    // on the Dirent. Stat the target to determine its real type.
+    if (entry.isSymbolicLink()) {
+      try {
+        const stat = statSync(path.join(dir, entry.name));
+        if (stat.isDirectory()) {
+          subDirs.push(path.join(dir, entry.name));
+          continue;
+        }
+        if (!stat.isFile()) continue;
+      } catch (e) {
+        // Broken symlink — skip.
+        if (process.env.NODE_ENV !== "production") console.debug("[scan] stat failed:", e);
+        continue;
+      }
+    } else if (!entry.isFile()) continue;
 
     const ext = path.extname(entry.name).toLowerCase();
     const type = FILE_TYPE_BY_EXT[ext] ?? null;
@@ -126,8 +142,9 @@ function statBatch(files: MediaFile[]): void {
       f.birthtimeMs = stat.birthtimeMs;
       f.birthtime = stat.birthtime.toISOString();
       f.dateKey = dateKeyFromMs(stat.birthtimeMs);
-    } catch {
+    } catch (e) {
       // unreadable → leave defaults
+      if (process.env.NODE_ENV !== "production") console.debug("[scan] metadata failed:", f.filePath, e);
     }
   }
 }
@@ -183,10 +200,11 @@ export async function scanFolder(
  * `MetaPatch[]` via `onMetaBatch` so the renderer can fill in size/date
  * progressively without a second scan.
  *
- * The phases are interleaved per-directory: enumerate → flush → stat →
- * patch → recurse. This gives the best perceived performance — the first
- * directory's thumbnails appear almost instantly, and metadata trails by
- * only the stat time of that one directory.
+ * The phases are sequential (CORR-5): Phase 1 fully enumerates the tree
+ * and emits placeholders immediately, then Phase 2 stats every discovered
+ * file and emits metadata patches. This gives the best perceived
+ * performance — thumbnails appear almost instantly with correct aspect
+ * ratios once measured, and metadata trails by only the stat time.
  *
  * @returns total number of media files found
  */
@@ -277,8 +295,9 @@ export async function scanFolderStream(
             birthtime: st.birthtime.toISOString(),
             dateKey: dateKeyFromMs(st.birthtimeMs),
           });
-        } catch {
+        } catch (e) {
           // unreadable → skip
+          if (process.env.NODE_ENV !== "production") console.debug("[scan] metaBatch stat failed:", f.filePath, e);
         }
       }
       if (patches.length > 0) onMetaBatch(patches);

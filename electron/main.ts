@@ -5,11 +5,13 @@ import {
   dialog,
   protocol,
   net,
+  nativeImage,
   utilityProcess,
   shell,
   clipboard,
 } from "electron";
 import path from "node:path";
+import fs from "node:fs";
 import { once } from "node:events";
 import * as mediaCache from "./mediaCache";
 import type { MediaFile, MetaPatch, ScanProgress } from "../src/scanner/types";
@@ -151,6 +153,11 @@ function messageStringField(msg: unknown, field: string): string | undefined {
   return undefined;
 }
 
+/** PERF-2: LRU cache for downscaled thumbnails so scrolling back doesn't
+ * re-decode the source image. Keyed on `${path}?w=${w}`. */
+const thumbCache = new Map<string, Uint8Array>();
+const THUMB_CACHE_MAX = 500;
+
 app.whenReady().then(() => {
   protocol.handle("media", async (request) => {
     // URL shape: media://local/<percent-encoded-absolute-path>
@@ -161,13 +168,13 @@ app.whenReady().then(() => {
     if (url.hostname !== "local") {
       return new Response("Forbidden", { status: 403 });
     }
-
-    // `url.pathname` always carries a leading `/` (it's a URL path). On
-    // Windows, `path.resolve("/C:\\...")` resolves relative to the
-    // current drive, which mis-resolves when the CWD is on a different
-    // drive. Strip the leading slash so the absolute path is honored
-    // verbatim (v2 review bug #2).
-    const raw = decodeURIComponent(url.pathname).replace(/^\//, "");
+    // `url.pathname` always carries a leading `/`.
+    // treats `/C:\...` as relative to the current drive, which mis-resolves
+    // when the CWD is on a different drive — strip the leading slash so the
+    // absolute path is honored verbatim (v2 review bug #2). On Linux/macOS
+    // the leading slash IS the absolute root and must be preserved (V5 SEC-1).
+    const rawPath = decodeURIComponent(url.pathname);
+    const raw = process.platform === "win32" ? rawPath.replace(/^\//, "") : rawPath;
     const requested = path.resolve(raw);
     if (!path.isAbsolute(requested)) {
       return new Response("Forbidden", { status: 403 });
@@ -178,6 +185,52 @@ app.whenReady().then(() => {
     // Linux/macOS (case-sensitive) aren't broken (v4 review M-6).
     if (!isUnderAllowedRoot(requested)) {
       return new Response("Forbidden", { status: 403 });
+    }
+
+    const targetWidth = url.searchParams.get("w");
+    if (targetWidth) {
+      const w = parseInt(targetWidth, 10);
+      if (Number.isFinite(w) && w > 0 && w <= 512) {
+        const cacheKey = `${requested}?w=${w}`;
+        const cached = thumbCache.get(cacheKey);
+        if (cached) {
+          // LRU bump.
+          thumbCache.delete(cacheKey);
+          thumbCache.set(cacheKey, cached);
+          return new Response(cached as unknown as BodyInit, {
+            headers: {
+              "Content-Type": "image/jpeg",
+              "Cache-Control": "public, max-age=86400",
+            },
+          });
+        }
+        try {
+          // PERF-2: skip downscaling for files > 50 MB to prevent OOM/DoS.
+          const stat = await fs.promises.stat(requested);
+          if (stat.size > 50 * 1024 * 1024) {
+            return net.fetch(pathToFileUrl(requested));
+          }
+          const buf = await fs.promises.readFile(requested);
+          const img = nativeImage.createFromBuffer(buf);
+          const resized = img.resize({ width: w, quality: "good" });
+          const jpeg = new Uint8Array(resized.toJPEG(75));
+          thumbCache.set(cacheKey, jpeg);
+          if (thumbCache.size > THUMB_CACHE_MAX) {
+            const oldest = thumbCache.keys().next().value;
+            if (oldest !== undefined) thumbCache.delete(oldest);
+          }
+          return new Response(jpeg as unknown as BodyInit, {
+            headers: {
+              "Content-Type": "image/jpeg",
+              "Cache-Control": "public, max-age=86400",
+            },
+          });
+        } catch (e) {
+          // Resize failed (corrupt image / unsupported format) —
+          // fall through to serving the raw file.
+          if (!app.isPackaged) console.debug("[media] resize failed:", e);
+        }
+      }
     }
 
     return net.fetch(pathToFileUrl(requested));
@@ -271,6 +324,10 @@ ipcMain.handle("scan:start", async (event, folderPath: string) => {
   // metadata cache on scan completion (v4 rework) — the renderer never
   // sends files back, so main must keep its own copy.
   const collected: MediaFile[] = [];
+  // ARCH-1: O(1) path→index lookup so metaBatch patches update collected
+  // in place, preventing unpatched Phase 1 placeholders from being
+  // written to the on-disk cache.
+  const pathIndex = new Map<string, number>();
 
   const child = utilityProcess.fork(path.join(__dirname, "scanWorker.js"), [], {
     stdio: "pipe",
@@ -295,16 +352,33 @@ ipcMain.handle("scan:start", async (event, folderPath: string) => {
     switch (messageType(msg)) {
       case "batch": {
         const files = messageFiles(msg);
-        collected.push(...files);
+        for (const f of files) {
+          pathIndex.set(f.filePath, collected.length);
+          collected.push(f);
+        }
         send("scan:batch", files);
         break;
       }
       case "progress":
         send("scan:progress", messageProgress(msg) as ScanProgress);
         break;
-      case "metaBatch":
-        send("scan:metaBatch", messagePatches(msg));
+      case "metaBatch": {
+        const patches = messagePatches(msg);
+        for (const patch of patches) {
+          const idx = pathIndex.get(patch.filePath);
+          if (idx !== undefined) {
+            collected[idx] = {
+              ...collected[idx],
+              sizeBytes: patch.sizeBytes,
+              birthtimeMs: patch.birthtimeMs,
+              birthtime: patch.birthtime,
+              dateKey: patch.dateKey,
+            };
+          }
+        }
+        send("scan:metaBatch", patches);
         break;
+      }
       case "done":
         total = messageTotal(msg);
         send("scan:done", total);

@@ -127,8 +127,10 @@ function scanReducer(state: ScanState, action: ScanAction): ScanState {
       return { ...state, status: "error", error: action.message, progress: null };
     case "cancelled":
       return { ...state, status: "cancelled", progress: null };
-    default:
-      return state;
+    default: {
+      const _exhaustive: never = action;
+      return _exhaustive;
+    }
   }
 }
 
@@ -184,6 +186,9 @@ export function useScanState(): UseScanStateReturn {
   // freezing the UI on large libraries (v5 rework).
   const batchBufferRef = useRef<MediaFile[]>([]);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // PERF-3: Buffer and throttle metaBatch patches (same 150ms coalescing).
+  const metaBufferRef = useRef<MetaPatch[]>([]);
+  const metaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flushBatches = useCallback(() => {
     flushTimerRef.current = null;
     const buffered = batchBufferRef.current;
@@ -209,6 +214,14 @@ export function useScanState(): UseScanStateReturn {
     const buffered = batchBufferRef.current;
     batchBufferRef.current = [];
     if (buffered.length > 0) dispatch({ type: "batch", files: buffered });
+    // PERF-3: flush any pending meta patches before marking done.
+    if (metaFlushTimerRef.current) {
+      clearTimeout(metaFlushTimerRef.current);
+      metaFlushTimerRef.current = null;
+    }
+    const metaBuffered = metaBufferRef.current;
+    metaBufferRef.current = [];
+    if (metaBuffered.length > 0) dispatch({ type: "metaBatch", patches: metaBuffered });
     dispatch({ type: "done" });
   }, []);
 
@@ -225,9 +238,20 @@ export function useScanState(): UseScanStateReturn {
     (files: MediaFile[]) => dispatch({ type: "restore", files }),
     [],
   );
+  const flushMeta = useCallback(() => {
+    metaFlushTimerRef.current = null;
+    const buffered = metaBufferRef.current;
+    if (buffered.length === 0) return;
+    metaBufferRef.current = [];
+    dispatch({ type: "metaBatch", patches: buffered });
+  }, []);
   const onMetaBatch = useCallback(
-    (patches: MetaPatch[]) => dispatch({ type: "metaBatch", patches }),
-    [],
+    (patches: MetaPatch[]) => {
+      metaBufferRef.current.push(...patches);
+      if (metaFlushTimerRef.current) return;
+      metaFlushTimerRef.current = setTimeout(flushMeta, 150);
+    },
+    [flushMeta],
   );
 
   return { state, files, onStart, onReset, onBatch, onProgress, onDone, onError, onCancelled, onRestore, onMetaBatch };

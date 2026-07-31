@@ -23,6 +23,8 @@ export class SoundManager {
   private static instance: SoundManager;
   private enabled: boolean = true;
   private config: SfxConfig = {};
+  /** ARCH-3: Sounds are disabled until setConfig provides audio URLs. */
+  private configured: boolean = false;
   private cache: Map<SfxEffect, HTMLAudioElement> = new Map();
   private cachedSrcs: Map<SfxEffect, string> = new Map();
   private lastHoverTime: number = 0;
@@ -44,9 +46,10 @@ export class SoundManager {
   public isEnabled = (): boolean => {
     return this.enabled;
   };
-
   public setConfig = (config: SfxConfig): void => {
     this.config = { ...this.config, ...config };
+    // ARCH-3: Only mark as configured if at least one URL is provided.
+    this.configured = !!(config.hover || config.click || config.scan);
   };
 
   public getConfig = (): SfxConfig => {
@@ -61,7 +64,9 @@ export class SoundManager {
    * All errors are swallowed to avoid disrupting the UI.
    */
   private playEffect(effect: SfxEffect): void {
-    if (!this.enabled) {
+    // ARCH-3: Fast no-op when disabled or never configured — avoids the
+    // debounce timer and Map lookup overhead on every thumbnail hover.
+    if (!this.enabled || !this.configured) {
       return;
     }
 
@@ -91,8 +96,9 @@ export class SoundManager {
           // Silently ignore audio play errors (e.g. unplayable format, missing file, autoplay restrictions)
         });
       }
-    } catch {
+    } catch (e) {
       // Silently swallow any synchronous audio API errors
+      if (import.meta.env.DEV) console.debug("[sfx]", e);
     }
   }
 

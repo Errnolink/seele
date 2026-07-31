@@ -47,6 +47,10 @@ export default function App() {
 
   // Media viewer (lightbox) state — v2 review #3.
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  // CORR-4: Track the active file's path so viewerIndex stays in sync
+  // when derivedFiles mutates (search, sort, scan batch) while the
+  // viewer is open.
+  const viewerFilePathRef = useRef<string | null>(null);
 
   // Thumbnail right-click context menu (v3 review #13).
   const [contextMenu, setContextMenu] = useState<{
@@ -225,8 +229,9 @@ export default function App() {
     playClick();
     try {
       await window.scanAPI.cancelScan();
-    } catch {
+    } catch (e) {
       // Best-effort; the worker may have already exited.
+      if (import.meta.env.DEV) console.debug("[cancelScan]", e);
     }
     // Transition the reducer to "cancelled" immediately so the UI
     // reflects the cancel without waiting for the worker's final
@@ -454,6 +459,22 @@ export default function App() {
     };
   }, [files, debouncedQuery, selectedFolder, groupMode, sortMode, sortDir]);
 
+  // CORR-4: When derivedFiles changes and the viewer is open, re-resolve
+  // viewerIndex by the tracked file path. If the file was removed by a
+  // filter change, close the viewer gracefully.
+  useEffect(() => {
+    if (viewerIndex === null || viewerFilePathRef.current === null) return;
+    const idx = derivedFiles.findIndex(
+      (f) => f.filePath === viewerFilePathRef.current,
+    );
+    if (idx === -1) {
+      setViewerIndex(null);
+      viewerFilePathRef.current = null;
+    } else if (idx !== viewerIndex) {
+      setViewerIndex(idx);
+    }
+  }, [derivedFiles, viewerIndex]);
+
   // Summary stats for the status bar (UX-8).
   const stats = useMemo(() => {
     let images = 0;
@@ -470,7 +491,8 @@ export default function App() {
   // Media viewer (lightbox) handlers — v2 review #3.
   // Index arrives from the grid (absolute tile index), avoiding an O(n)
   // findIndex on every click (v3 review #5).
-  const openViewer = useCallback((_file: MediaFile, index: number) => {
+  const openViewer = useCallback((file: MediaFile, index: number) => {
+    viewerFilePathRef.current = file.filePath;
     setViewerIndex(index);
   }, []);
 
@@ -531,20 +553,24 @@ export default function App() {
       setViewerIndex((prev) => {
         if (prev === null || derivedFiles.length === 0) return prev;
         // Stop at boundaries — no wrap-around (v3 review #8).
-        if (direction === "prev") {
-          return prev > 0 ? prev - 1 : prev;
+        const next = direction === "prev" ? (prev > 0 ? prev - 1 : prev) : (prev < derivedFiles.length - 1 ? prev + 1 : prev);
+        if (next !== prev && derivedFiles[next]) {
+          viewerFilePathRef.current = derivedFiles[next].filePath;
         }
-        return prev < derivedFiles.length - 1 ? prev + 1 : prev;
+        return next;
       });
     },
-    [derivedFiles.length],
+    [derivedFiles],
   );
 
   const navigateViewerTo = useCallback(
     (index: number) => {
-      if (index >= 0 && index < derivedFiles.length) setViewerIndex(index);
+      if (index >= 0 && index < derivedFiles.length) {
+        viewerFilePathRef.current = derivedFiles[index].filePath;
+        setViewerIndex(index);
+      }
     },
-    [derivedFiles.length],
+    [derivedFiles],
   );
 
   const isScanning = scan.status === "scanning";

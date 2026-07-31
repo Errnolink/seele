@@ -205,13 +205,9 @@ export const VirtualizedGrid: React.FC<VirtualizedGridProps> = ({
 
     for (const group of groups) {
       const sectionStartY = cursorY;
-      let bodyStartY = sectionStartY;
+      const sectionHeaderOffset = group.header ? HEADER_HEIGHT + GAP : 0;
 
-      if (group.header) {
-        bodyStartY = sectionStartY + HEADER_HEIGHT + GAP;
-      }
-
-      const colHeights = new Array(columnCount).fill(bodyStartY);
+      const colHeights = new Array(columnCount).fill(sectionHeaderOffset);
       const tiles: PlacedTile[] = [];
 
       for (let i = 0; i < group.files.length; i++) {
@@ -245,7 +241,7 @@ export const VirtualizedGrid: React.FC<VirtualizedGridProps> = ({
         colHeights[shortestCol] = y + tileHeight + GAP;
       }
 
-      const sectionHeight = Math.max(...colHeights, bodyStartY) - sectionStartY;
+      const sectionHeight = Math.max(...colHeights, sectionHeaderOffset);
       const section: Section = {
         header: group.header,
         tiles,

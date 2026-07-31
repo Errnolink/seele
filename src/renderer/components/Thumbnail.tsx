@@ -51,12 +51,21 @@ export const Thumbnail: React.FC<ThumbnailProps> = memo(
     const [loaded, setLoaded] = useState(false);
     const [errored, setErrored] = useState(false);
 
-    const mediaUrl =
-      typeof window !== "undefined" &&
-      window.scanAPI &&
-      typeof window.scanAPI.toMediaUrl === "function"
-        ? window.scanAPI.toMediaUrl(file.filePath)
-        : file.filePath;
+    const mediaUrl = React.useMemo(() => {
+      const base =
+        typeof window !== "undefined" &&
+        window.scanAPI &&
+        typeof window.scanAPI.toMediaUrl === "function"
+          ? window.scanAPI.toMediaUrl(file.filePath)
+          : file.filePath;
+      // PERF-1: request a server-side downscaled thumbnail for images.
+      // Aspect ratio is preserved under uniform downscaling, so dimension
+      // measurement via naturalWidth/Height is unaffected.
+      if (file.fileType === "image") {
+        return `${base}?w=${Math.min(512, Math.max(128, Math.round(width * 1.5)))}`;
+      }
+      return base;
+    }, [file.filePath, file.fileType, width]);
 
     const handleLoadedData = () => {
       setLoaded(true);
@@ -113,7 +122,7 @@ export const Thumbnail: React.FC<ThumbnailProps> = memo(
                 <line x1="12" y1="8" x2="12" y2="12" />
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
-              <span className="font-mono text-[9px] uppercase">UNREADABLE</span>
+              <span className="font-mono text-[10px] uppercase">UNREADABLE</span>
             </div>
           )}
 
@@ -146,7 +155,9 @@ export const Thumbnail: React.FC<ThumbnailProps> = memo(
                 const img = e.currentTarget;
                 const nw = img.naturalWidth;
                 const nh = img.naturalHeight;
-                if (nw > 0 && nh > 0) onDimensions?.(file.filePath, nw, nh);
+                if (nw > 0 && nh > 0 && (nw !== file.width || nh !== file.height)) {
+                  onDimensions?.(file.filePath, nw, nh);
+                }
               }}
               onError={() => setErrored(true)}
               className={`w-full h-full object-cover block transition-opacity duration-300 ${loaded ? "opacity-100" : "opacity-0"}`}
@@ -157,7 +168,7 @@ export const Thumbnail: React.FC<ThumbnailProps> = memo(
           {!errored && (
             <div className="absolute top-1.5 right-1.5 bg-black/70 px-1.5 py-0.5 border border-nerv-border/50 pointer-events-none">
               <span
-                className={`font-mono text-[9px] tracking-wider uppercase font-bold ${
+                className={`font-mono text-[10px] tracking-wider uppercase font-bold ${
                   isVideo ? "text-nerv-green" : "text-nerv-cyan"
                 }`}
               >
@@ -172,7 +183,7 @@ export const Thumbnail: React.FC<ThumbnailProps> = memo(
               <span className="truncate text-[10px] text-nerv-text leading-tight" title={file.fileName}>
                 {file.fileName}
               </span>
-              <span className="text-[9px] text-nerv-cyan font-semibold">
+              <span className="text-[10px] text-nerv-cyan font-semibold">
                 {formatBytes(file.sizeBytes)}
               </span>
             </div>
