@@ -620,7 +620,7 @@ export default function App() {
       {/* ── Top app bar ─────────────────────────────────────────── */}
       <header className="titlebar-drag relative z-20 flex flex-col flex-shrink-0 border-b border-nerv-border/60 bg-nerv-panel/40 backdrop-blur-sm">
         {/* Row 1 — wordmark + actions + search */}
-        <div className="no-drag flex items-center gap-3 px-4 h-12">
+        <div className="no-drag flex items-center gap-3 pl-4 h-12" style={{ paddingRight: "160px" }}>
           {/* Wordmark */}
           <div className="flex items-center gap-2 flex-shrink-0 pr-3 border-r border-nerv-border/60 h-full">
             <span className="w-2 h-2 bg-nerv-orange animate-blink flex-shrink-0" />
