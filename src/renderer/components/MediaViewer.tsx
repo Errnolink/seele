@@ -542,7 +542,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                 style={{ border: "1px solid rgba(255,85,0,0.2)" }}
               />
             ) : (
-              <div className="relative" style={{ maxWidth: "82vw", maxHeight: "78vh" }}>
+              <div className="relative thumb-checkerboard" style={{ maxWidth: "82vw", maxHeight: "78vh" }}>
                 {/* Base preview layer — always visible, no blank flash on zoom */}
                 <img
                   key={`prev-${file.filePath}`}

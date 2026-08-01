@@ -107,6 +107,10 @@ const MediaCard = memo(function MediaCard({
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const isVideo = file.fileType === "video";
+  // Formats that may carry an alpha channel (PNG/GIF/WebP/SVG). Triggers
+  // a checkerboard backdrop so transparency is visible — invisible for
+  // fully-opaque images since the <img> (z-1) covers the ::before (z-0).
+  const mayHaveAlpha = !isVideo && /\.(png|gif|webp|svg)$/i.test(file.filePath);
   // Cache-buster only added on retry (epoch > 0 + tile was errored).
   const [retryCount, setRetryCount] = useState(0);
   const baseUrl = useMemo(() => tileUrl(file, tileWidth), [file, tileWidth]);
@@ -144,6 +148,7 @@ const MediaCard = memo(function MediaCard({
       }}
       className={[
         "group relative rounded border overflow-hidden transition-all duration-200 cursor-pointer bg-nerv-panel select-none",
+        mayHaveAlpha && "thumb-checkerboard",
         selected
           ? "border-nerv-orange ring-2 ring-nerv-orange/50 shadow-[0_0_15px_rgba(255,85,0,0.3)]"
           : "border-nerv-border hover:border-nerv-orange/70 hover:shadow-lg",
