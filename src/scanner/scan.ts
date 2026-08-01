@@ -280,6 +280,7 @@ export async function scanFolderStream(
   // Runs after enumeration completes. Yields between batches so the
   // renderer can process metadata patches without blocking.
   if (onMetaBatch && !signal?.aborted && pendingStat.length > 0) {
+    const probe = options.probeDimensions;
     const STAT_CHUNK = 500;
     for (let i = 0; i < pendingStat.length; i += STAT_CHUNK) {
       if (signal?.aborted) break;
@@ -288,13 +289,21 @@ export async function scanFolderStream(
       for (const f of chunk) {
         try {
           const st = statSync(f.filePath);
-          patches.push({
+          const patch: MetaPatch = {
             filePath: f.filePath,
             sizeBytes: st.size,
             birthtimeMs: st.birthtimeMs,
             birthtime: st.birthtime.toISOString(),
             dateKey: dateKeyFromMs(st.birthtimeMs),
-          });
+          };
+          if (probe && f.fileType === "image") {
+            const dims = probe(f);
+            if (dims && dims.width > 0 && dims.height > 0) {
+              patch.width = dims.width;
+              patch.height = dims.height;
+            }
+          }
+          patches.push(patch);
         } catch (e) {
           // unreadable → skip
           if (process.env.NODE_ENV !== "production") console.debug("[scan] metaBatch stat failed:", f.filePath, e);

@@ -422,6 +422,10 @@ ipcMain.handle("scan:start", async (event, folderPath: string) => {
               birthtimeMs: patch.birthtimeMs,
               birthtime: patch.birthtime,
               dateKey: patch.dateKey,
+              // Persist measured dimensions so the next startup restores
+              // correct masonry aspect ratios without re-probing.
+              width: patch.width ?? collected[idx].width,
+              height: patch.height ?? collected[idx].height,
             };
           }
         }

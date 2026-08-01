@@ -409,8 +409,8 @@ export function Header(props: HeaderProps) {
         </div>
       </div>
 
-      {/* Row 2 — control strip */}
-      <div className="h-12 px-3 flex items-center gap-2 bg-gradient-to-b from-[#0d0b08] to-[#0a0908] border-b border-nerv-border/60">
+      {/* Row 2 — control strip (wraps to multiple lines on narrow windows) */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2 border-b border-nerv-border/60 bg-gradient-to-b from-[#0d0b08] to-[#0a0908]">
         <EvaSegmented
           label="VIEW"
           value={viewMode}
@@ -485,9 +485,10 @@ export function Header(props: HeaderProps) {
           </div>
         )}
 
-        {/* RESULT readout — pushed to the right */}
-        <div className="flex-1" />
+        {/* Spacer pushes RESULT to the right when there's room */}
+        <div className="flex-1 min-w-0" />
 
+        {/* RESULT readout */}
         <div className="eva-frame">
           <div className="eva-inner h-7 px-3 flex items-center gap-2 bg-[#0a0908]">
             <span className="text-[9px] font-bold tracking-[0.25em] phosphor-dim">
@@ -501,12 +502,9 @@ export function Header(props: HeaderProps) {
               {pad(totalCount, 4)}
             </span>
             {selectedCount > 0 && (
-              <>
-                <span className="phosphor-dim text-[10px] mx-0.5">|</span>
-                <span className="phosphor-amber text-[10px] font-bold tabular-nums">
-                  {pad(selectedCount, 3)} SEL
-                </span>
-              </>
+              <span className="phosphor-lime text-[10px] font-bold tabular-nums ml-1 px-1.5 border border-nerv-lime/40">
+                {pad(selectedCount, 3)} SEL
+              </span>
             )}
           </div>
         </div>

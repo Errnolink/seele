@@ -104,6 +104,10 @@ function scanReducer(state: ScanState, action: ScanAction): ScanState {
             birthtimeMs: patch.birthtimeMs,
             birthtime: patch.birthtime,
             dateKey: patch.dateKey,
+            // Dimensions may be absent (video or unreadable header); only
+            // overwrite when the probe produced a real value.
+            width: patch.width ?? file.width,
+            height: patch.height ?? file.height,
           };
         });
         if (!rewrote) return batch;

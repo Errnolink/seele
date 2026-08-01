@@ -73,6 +73,14 @@ export interface MetaPatch {
   birthtimeMs: number;
   birthtime: string;
   dateKey: string;
+  /**
+   * Natural pixel width, or `0` when not probed/unreadable. Picked up by
+   * the renderer so masonry tiles adopt their real aspect ratio instead
+   * of a uniform fallback (paired with {@link height}).
+   */
+  width?: number;
+  /** See {@link width}. */
+  height?: number;
 }
 
 /** Options accepted by {@link scanFolder} / {@link scanFolderStream}. */
@@ -89,4 +97,13 @@ export interface ScanOptions {
    * scan over a huge directory (review issue #3).
    */
   signal?: AbortSignal;
+  /**
+   * Optional header-only dimension probe for image files. Called per file
+   * during Phase 2 stat; the Electron worker passes a lightweight reader
+   * (image-size) so the masonry grid gets real aspect ratios without the
+   * scanner depending on any native imaging library. Returns `{width,height}`
+   * or `null` when the header can't be parsed. Only invoked for images;
+   * videos are skipped (probe is responsible for early-out).
+   */
+  probeDimensions?: (file: MediaFile) => { width: number; height: number } | null;
 }
