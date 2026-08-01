@@ -22,6 +22,10 @@ export interface SidebarProps {
   typeFilter: MediaTypeFilter;
   onTypeFilterChange: (t: MediaTypeFilter) => void;
   stats: ScanStats;
+  /** Move selected files to a directory (drag-to-folder support). */
+  onDropFiles?: (filePaths: string[], destDir: string) => void;
+  /** Currently selected file IDs (for the drag source). */
+  selectedIds?: Set<string>;
 }
 
 /** A quick-view filter button definition (§7.2 table). */
@@ -152,6 +156,8 @@ interface FolderTreeNodeProps {
   selectedFolder: string | null;
   onSelectFolder: (p: string | null) => void;
   filter: string;
+  onDropFiles?: (filePaths: string[], destDir: string) => void;
+  selectedIds?: Set<string>;
 }
 
 /** Recursive folder row. The ALL FILES clearFolder action lives above; rows
@@ -164,10 +170,13 @@ const FolderTreeNode = memo(function FolderTreeNode({
   selectedFolder,
   onSelectFolder,
   filter,
+  onDropFiles,
+  selectedIds,
 }: FolderTreeNodeProps) {
   const hasChildren = node.children.length > 0;
   const isOpen = expanded.has(node.path);
   const selected = selectedFolder === node.path;
+  const [isDropTarget, setIsDropTarget] = useState(false);
 
   return (
     <div>
@@ -178,12 +187,26 @@ const FolderTreeNode = memo(function FolderTreeNode({
         onClick={() =>
           onSelectFolder(selected ? null : node.path)
         }
+        onDragOver={(e) => {
+          if (onDropFiles && selectedIds && selectedIds.size > 0) {
+            e.preventDefault();
+            setIsDropTarget(true);
+          }
+        }}
+        onDragLeave={() => setIsDropTarget(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setIsDropTarget(false);
+          if (onDropFiles && selectedIds && selectedIds.size > 0) {
+            onDropFiles([...selectedIds], node.path);
+          }
+        }}
         style={{ paddingLeft: 6 + depth * 10 }}
-        className={`group relative flex items-center gap-1.5 py-[3px] pr-1 cursor-pointer font-mono text-[10px] tracking-wider ${
+        className={`group relative flex items-center gap-1.5 py-[3px] pr-1 cursor-pointer font-mono text-[10px] tracking-wider transition-colors ${
           selected
             ? "phosphor-lime font-bold"
             : "text-nerv-muted hover:text-nerv-lime/80"
-        }`}
+        } ${isDropTarget ? "bg-nerv-lime/20 ring-1 ring-nerv-lime/50" : ""}`}
       >
         {/* 2px lime selection marker */}
         {selected && (
@@ -216,10 +239,15 @@ const FolderTreeNode = memo(function FolderTreeNode({
 
         <span className="flex-1 truncate">{node.name}</span>
 
+        {/* drop indicator */}
+        {isDropTarget && (
+          <span className="shrink-0 phosphor-lime text-[9px]">⇐ DROP</span>
+        )}
+
         <span
           className={`shrink-0 tabular-nums ${
             selected ? "phosphor-amber" : "text-nerv-muted"
-          }`}
+          } ${isDropTarget ? "hidden" : ""}`}
         >
           {pad(node.count, 2)}
         </span>
@@ -237,6 +265,8 @@ const FolderTreeNode = memo(function FolderTreeNode({
               selectedFolder={selectedFolder}
               onSelectFolder={onSelectFolder}
               filter={filter}
+              onDropFiles={onDropFiles}
+              selectedIds={selectedIds}
             />
           ))}
         </div>
@@ -254,6 +284,8 @@ interface DirectoryExplorerProps {
   onSelectFolder: (p: string | null) => void;
   expanded: Set<string>;
   setExpanded: React.Dispatch<React.SetStateAction<Set<string>>>;
+  onDropFiles?: (filePaths: string[], destDir: string) => void;
+  selectedIds?: Set<string>;
 }
 
 const DirectoryExplorer = memo(function DirectoryExplorer({
@@ -263,6 +295,8 @@ const DirectoryExplorer = memo(function DirectoryExplorer({
   onSelectFolder,
   expanded,
   setExpanded,
+  onDropFiles,
+  selectedIds,
 }: DirectoryExplorerProps) {
   const [filterRaw, setFilterRaw] = useState("");
   // Keep typing responsive; defer the (potentially deep) subtree filter.
@@ -364,6 +398,8 @@ const DirectoryExplorer = memo(function DirectoryExplorer({
             selectedFolder={selectedFolder}
             onSelectFolder={onSelectFolder}
             filter={filter}
+            onDropFiles={onDropFiles}
+            selectedIds={selectedIds}
           />
         ) : (
           <div className="text-[10px] font-mono text-nerv-muted px-1 py-2">
@@ -457,6 +493,8 @@ function SidebarInner({
   typeFilter,
   onTypeFilterChange,
   stats,
+  onDropFiles,
+  selectedIds,
 }: SidebarProps) {
   // Folder expansion state is LOCAL to the sidebar.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -488,6 +526,8 @@ function SidebarInner({
           onSelectFolder={onSelectFolder}
           expanded={expanded}
           setExpanded={setExpanded}
+          onDropFiles={onDropFiles}
+          selectedIds={selectedIds}
         />
 
         <StorageTelemetry stats={stats} />

@@ -114,6 +114,15 @@ const MediaCard = memo(function MediaCard({
       }}
       onDoubleClick={() => onOpen(file)}
       onContextMenu={(e) => onContextMenu(file, e)}
+      draggable
+      onDragStart={(e) => {
+        // If the dragged tile isn't already selected, exclusive-select it so
+        // the sidebar drop handler moves exactly this file (or the existing
+        // multi-selection if the tile was already part of it).
+        if (!selected) onToggleSelect(file.filePath, e as unknown as React.MouseEvent);
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", file.filePath);
+      }}
       className={[
         "group relative rounded border overflow-hidden transition-all duration-200 cursor-pointer bg-nerv-panel select-none",
         selected
@@ -907,6 +916,12 @@ const ListView = memo(function ListView({
             onClick={() => onInspect(file)}
             onDoubleClick={() => onOpen(file)}
             onContextMenu={(e) => onContextMenu(file, e)}
+            draggable
+            onDragStart={(e) => {
+              if (!selected) onToggleSelect(file.filePath, e);
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/plain", file.filePath);
+            }}
             className={[
               "absolute left-0 flex items-center border-t border-nerv-border transition-colors cursor-pointer",
               selected ? "bg-nerv-orange/10" : "hover:bg-nerv-panel-2/80",

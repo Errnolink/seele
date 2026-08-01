@@ -41,7 +41,8 @@ type ScanAction =
   | { type: "error"; message: string }
   | { type: "cancelled" }
   | { type: "restore"; files: MediaFile[] }
-  | { type: "metaBatch"; patches: MetaPatch[] };
+  | { type: "metaBatch"; patches: MetaPatch[] }
+  | { type: "removeFiles"; filePaths: Set<string> };
 
 const initialState: ScanState = {
   batches: [],
@@ -129,6 +130,36 @@ function scanReducer(state: ScanState, action: ScanAction): ScanState {
       return { ...state, status: "done", progress: null };
     case "error":
       return { ...state, status: "error", error: action.message, progress: null };
+    case "removeFiles": {
+      // After a move/trash, purge the affected files from every batch.
+      // Each batch array is filtered in place; empty batches are dropped.
+      const remove = action.filePaths;
+      let changed = false;
+      const nextBatches: MediaFile[][] = [];
+      let actualRemoved = 0;
+      for (const batch of state.batches) {
+        const filtered = batch.filter((f) => {
+          if (remove.has(f.filePath)) {
+            actualRemoved++;
+            return false;
+          }
+          return true;
+        });
+        if (filtered.length !== batch.length) {
+          changed = true;
+          if (filtered.length > 0) nextBatches.push(filtered);
+        } else {
+          nextBatches.push(batch);
+        }
+      }
+      if (!changed) return state;
+      return {
+        ...state,
+        batches: nextBatches,
+        filesVersion: state.filesVersion + 1,
+        count: Math.max(0, state.count - actualRemoved),
+      };
+    }
     case "cancelled":
       return { ...state, status: "cancelled", progress: null };
     default: {
@@ -164,6 +195,8 @@ export interface UseScanStateReturn {
   onRestore: (files: MediaFile[]) => void;
   /** Apply phase-2 metadata patches to placeholder files in place. */
   onMetaBatch: (patches: MetaPatch[]) => void;
+  /** Remove files from local state after move/trash operations. */
+  onRemoveFiles: (filePaths: Set<string>) => void;
 }
 
 /**
@@ -257,6 +290,10 @@ export function useScanState(): UseScanStateReturn {
     },
     [flushMeta],
   );
+  const onRemoveFiles = useCallback(
+    (filePaths: Set<string>) => dispatch({ type: "removeFiles", filePaths }),
+    [],
+  );
 
-  return { state, files, onStart, onReset, onBatch, onProgress, onDone, onError, onCancelled, onRestore, onMetaBatch };
+  return { state, files, onStart, onReset, onBatch, onProgress, onDone, onError, onCancelled, onRestore, onMetaBatch, onRemoveFiles };
 }

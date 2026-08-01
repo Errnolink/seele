@@ -81,6 +81,17 @@ export interface ScanAPI {
   openPath(filePath: string): Promise<string>;
   /** Copy text to the system clipboard (v3 review #13). */
   writeClipboard(text: string): Promise<void>;
+
+  // ── File operations (organize & move) ──
+
+  /** Result of a single file operation. */
+  moveFile(filePath: string, destDir: string): Promise<{ filePath: string; ok: boolean; newPath?: string; error?: string }>;
+  moveFiles(filePaths: string[], destDir: string): Promise<Array<{ filePath: string; ok: boolean; newPath?: string; error?: string }>>;
+  trashFile(filePath: string): Promise<{ filePath: string; ok: boolean; error?: string }>;
+  trashFiles(filePaths: string[]): Promise<Array<{ filePath: string; ok: boolean; error?: string }>>;
+  renameFile(filePath: string, newName: string): Promise<{ filePath: string; ok: boolean; newPath?: string; error?: string }>;
+  createFolder(dirPath: string): Promise<{ ok: boolean; error?: string }>;
+  pickMoveTarget(defaultPath?: string): Promise<string | null>;
 }
 
 const api: ScanAPI = {
@@ -146,10 +157,19 @@ const api: ScanAPI = {
     entries: { filePath: string; width: number; height: number }[],
   ) => ipcRenderer.invoke("scan:saveDimensions", entries),
 
-  // Context-menu actions (v3 review #13).
+  // Context-menu / shell actions.
   showItemInFolder: (filePath) => ipcRenderer.invoke("shell:showItemInFolder", filePath),
   openPath: (filePath) => ipcRenderer.invoke("shell:openPath", filePath),
   writeClipboard: (text) => ipcRenderer.invoke("clipboard:writeText", text),
+
+  // File operations (organize & move).
+  moveFile: (filePath, destDir) => ipcRenderer.invoke("file:move", filePath, destDir),
+  moveFiles: (filePaths, destDir) => ipcRenderer.invoke("file:moveBatch", filePaths, destDir),
+  trashFile: (filePath) => ipcRenderer.invoke("file:trash", filePath),
+  trashFiles: (filePaths) => ipcRenderer.invoke("file:trashBatch", filePaths),
+  renameFile: (filePath, newName) => ipcRenderer.invoke("file:rename", filePath, newName),
+  createFolder: (dirPath) => ipcRenderer.invoke("folder:create", dirPath),
+  pickMoveTarget: (defaultPath) => ipcRenderer.invoke("dialog:pickMoveTarget", defaultPath),
 };
 
 contextBridge.exposeInMainWorld("scanAPI", api);

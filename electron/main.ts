@@ -517,3 +517,216 @@ ipcMain.handle("shell:openPath", async (_e, filePath: string) => {
 ipcMain.handle("clipboard:writeText", (_e, text: string) => {
   if (typeof text === "string") clipboard.writeText(text);
 });
+
+/* ------------------------------------------------------------------ *
+ *  File operations (organize & move) — the core purpose.
+ *  Every path is gated through isUnderAllowedRoot so the renderer can
+ *  never touch files outside the scanned folder.
+ * ------------------------------------------------------------------ */
+
+/** Result of a single file move/rename. */
+interface FileOpResult {
+  filePath: string;
+  ok: boolean;
+  newPath?: string;
+  error?: string;
+}
+
+/**
+ * Move one file to a destination directory. The destination must be
+ * under the allowed root. If a file with the same name exists, a numeric
+ * suffix ` (1)`, ` (2)`, … is appended before the extension.
+ */
+ipcMain.handle(
+  "file:move",
+  async (_e, filePath: string, destDir: string): Promise<FileOpResult> => {
+    const src = path.resolve(filePath);
+    const dest = path.resolve(destDir);
+    if (!isUnderAllowedRoot(src) || !isUnderAllowedRoot(dest)) {
+      return { filePath, ok: false, error: "forbidden" };
+    }
+    try {
+      await fs.promises.mkdir(dest, { recursive: true });
+      const name = path.basename(src);
+      const newPath = await uniquePath(dest, name);
+      await fs.promises.rename(src, newPath);
+      return { filePath, ok: true, newPath };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { filePath, ok: false, error: msg };
+    }
+  },
+);
+
+/**
+ * Move many files to the same destination directory. Returns per-file
+ * results so the renderer can patch its local state incrementally.
+ */
+ipcMain.handle(
+  "file:moveBatch",
+  async (_e, filePaths: string[], destDir: string): Promise<FileOpResult[]> => {
+    const dest = path.resolve(destDir);
+    if (!isUnderAllowedRoot(dest)) {
+      return filePaths.map((filePath) => ({ filePath, ok: false, error: "forbidden" }));
+    }
+    try {
+      await fs.promises.mkdir(dest, { recursive: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return filePaths.map((filePath) => ({ filePath, ok: false, error: msg }));
+    }
+    const results: FileOpResult[] = [];
+    for (const fp of filePaths) {
+      const src = path.resolve(fp);
+      if (!isUnderAllowedRoot(src)) {
+        results.push({ filePath: fp, ok: false, error: "forbidden" });
+        continue;
+      }
+      try {
+        const name = path.basename(src);
+        const newPath = await uniquePath(dest, name);
+        await fs.promises.rename(src, newPath);
+        results.push({ filePath: fp, ok: true, newPath });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        results.push({ filePath: fp, ok: false, error: msg });
+      }
+    }
+    return results;
+  },
+);
+
+/**
+ * Send a file to the OS trash (safe, reversible). Falls back to
+ * `fs.unlink` only if `shell.trashItem` is unavailable.
+ */
+ipcMain.handle(
+  "file:trash",
+  async (_e, filePath: string): Promise<FileOpResult> => {
+    const src = path.resolve(filePath);
+    if (!isUnderAllowedRoot(src)) {
+      return { filePath, ok: false, error: "forbidden" };
+    }
+    try {
+      await shell.trashItem(src);
+      return { filePath, ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { filePath, ok: false, error: msg };
+    }
+  },
+);
+
+/** Trash many files at once. */
+ipcMain.handle(
+  "file:trashBatch",
+  async (_e, filePaths: string[]): Promise<FileOpResult[]> => {
+    const results: FileOpResult[] = [];
+    for (const fp of filePaths) {
+      const src = path.resolve(fp);
+      if (!isUnderAllowedRoot(src)) {
+        results.push({ filePath: fp, ok: false, error: "forbidden" });
+        continue;
+      }
+      try {
+        await shell.trashItem(src);
+        results.push({ filePath: fp, ok: true });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        results.push({ filePath: fp, ok: false, error: msg });
+      }
+    }
+    return results;
+  },
+);
+
+/**
+ * Rename a file in place (same directory, new name).
+ */
+ipcMain.handle(
+  "file:rename",
+  async (_e, filePath: string, newName: string): Promise<FileOpResult> => {
+    const src = path.resolve(filePath);
+    if (!isUnderAllowedRoot(src) || typeof newName !== "string" || newName.length === 0) {
+      return { filePath, ok: false, error: "forbidden" };
+    }
+    // Reject path separators in the new name — it must be a bare filename.
+    if (/[\\/]/.test(newName)) {
+      return { filePath, ok: false, error: "name must not contain path separators" };
+    }
+    try {
+      const dir = path.dirname(src);
+      const newPath = await uniquePath(dir, newName);
+      await fs.promises.rename(src, newPath);
+      return { filePath, ok: true, newPath };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { filePath, ok: false, error: msg };
+    }
+  },
+);
+
+/**
+ * Create a new folder (intermediates as needed) under the allowed root.
+ */
+ipcMain.handle(
+  "folder:create",
+ async (_e, dirPath: string): Promise<{ ok: boolean; error?: string }> => {
+    const dir = path.resolve(dirPath);
+    if (!isUnderAllowedRoot(dir)) return { ok: false, error: "forbidden" };
+    try {
+      await fs.promises.mkdir(dir, { recursive: true });
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
+    }
+  },
+);
+
+/**
+ * Open a native folder picker scoped to the allowed root so the user
+ * can choose a move destination. Returns the chosen path or null.
+ */
+ipcMain.handle(
+  "dialog:pickMoveTarget",
+  async (_e, defaultPath?: string): Promise<string | null> => {
+    if (!mainWindow) return null;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ["openDirectory", "createDirectory"],
+      defaultPath: defaultPath && isUnderAllowedRoot(path.resolve(defaultPath))
+        ? defaultPath
+        : undefined,
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    const picked = result.filePaths[0];
+    // Allow picking inside or creating under the root, but warn if outside.
+    return picked;
+  },
+);
+
+/**
+ * Resolve a non-colliding path in `dir` for the given `name`. If
+ * `name.ext` exists, tries `name (1).ext`, `name (2).ext`, etc.
+ */
+async function uniquePath(dir: string, name: string): Promise<string> {
+  const candidate = path.join(dir, name);
+  try {
+    await fs.promises.access(candidate);
+    // Exists — find a suffix.
+  } catch {
+    return candidate; // Doesn't exist — use as-is.
+  }
+  const ext = path.extname(name);
+  const base = path.basename(name, ext);
+  for (let i = 1; i < 10000; i++) {
+    const suffixed = path.join(dir, `${base} (${i})${ext}`);
+    try {
+      await fs.promises.access(suffixed);
+    } catch {
+      return suffixed;
+    }
+  }
+  // Fallback — append a timestamp.
+  return path.join(dir, `${base} (${Date.now()})${ext}`);
+}

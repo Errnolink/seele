@@ -109,6 +109,7 @@ export default function App() {
     onCancelled,
     onRestore,
     onMetaBatch,
+    onRemoveFiles,
   } = useScanState();
 
   // ---- core state ----
@@ -304,6 +305,84 @@ export default function App() {
       return next;
     });
   }, []);
+
+  // ---- file operations (organize & move) ----
+
+  /** Move a single file to a folder picked via native dialog. */
+  const handleMoveFile = useCallback(async (file: MediaFile) => {
+    const dest = await window.scanAPI.pickMoveTarget(folder ?? undefined);
+    if (!dest) return;
+    const result = await window.scanAPI.moveFile(file.filePath, dest);
+    if (result.ok) {
+      onRemoveFiles(new Set([file.filePath]));
+    }
+  }, [folder, onRemoveFiles]);
+
+  /** Move all selected files to a folder picked via native dialog. */
+  const handleMoveSelected = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    const dest = await window.scanAPI.pickMoveTarget(folder ?? undefined);
+    if (!dest) return;
+    const paths = [...selectedIds];
+    const results = await window.scanAPI.moveFiles(paths, dest);
+    const moved = new Set(
+      results.filter((r) => r.ok).map((r) => r.filePath),
+    );
+    if (moved.size > 0) {
+      onRemoveFiles(moved);
+      setSelectedIds(new Set());
+    }
+  }, [selectedIds, folder, onRemoveFiles]);
+
+  /** Move files to a specific known directory (sidebar drop / quick move). */
+  const handleMoveToDir = useCallback(async (filePaths: string[], destDir: string) => {
+    if (filePaths.length === 0) return;
+    const results = await window.scanAPI.moveFiles(filePaths, destDir);
+    const moved = new Set(
+      results.filter((r) => r.ok).map((r) => r.filePath),
+    );
+    if (moved.size > 0) {
+      onRemoveFiles(moved);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const p of moved) next.delete(p);
+        return next;
+      });
+    }
+  }, [onRemoveFiles]);
+
+  /** Trash a single file (send to OS recycle bin). */
+  const handleTrashFile = useCallback(async (file: MediaFile) => {
+    const result = await window.scanAPI.trashFile(file.filePath);
+    if (result.ok) {
+      onRemoveFiles(new Set([file.filePath]));
+    }
+  }, [onRemoveFiles]);
+
+  /** Trash all selected files. */
+  const handleTrashSelected = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    const paths = [...selectedIds];
+    const results = await window.scanAPI.trashFiles(paths);
+    const trashed = new Set(
+      results.filter((r) => r.ok).map((r) => r.filePath),
+    );
+    if (trashed.size > 0) {
+      onRemoveFiles(trashed);
+      setSelectedIds(new Set());
+    }
+  }, [selectedIds, onRemoveFiles]);
+
+  /** Rename a single file in place. */
+  const handleRenameFile = useCallback(async (file: MediaFile, newName: string) => {
+    const result = await window.scanAPI.renameFile(file.filePath, newName);
+    if (result.ok) {
+      // Rename changes the path — remove old, the rescan or next session
+      // picks up the new name. For immediate feedback we just remove old.
+      onRemoveFiles(new Set([file.filePath]));
+    }
+    return result;
+  }, [onRemoveFiles]);
 
   // ---- viewer handlers ----
   // Ref to the latest derivedFiles so navigation callbacks stay stable
@@ -727,6 +806,8 @@ export default function App() {
           typeFilter={typeFilter}
           onTypeFilterChange={setTypeFilter}
           stats={stats}
+          onDropFiles={handleMoveToDir}
+          selectedIds={selectedIds}
         />
 
         {/* Main content */}
@@ -810,54 +891,6 @@ export default function App() {
         </main>
       </div>
 
-      {/* Floating batch action toolbar */}
-      {selectedIds.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-nerv-panel border border-nerv-orange/60 rounded-lg px-4 py-2 flex items-center gap-4 text-xs font-mono animate-glow-orange">
-          <span className="text-nerv-orange font-bold">
-            {selectedIds.size} item(s) selected
-          </span>
-          <span className="w-px h-4 bg-nerv-border" />
-          <button
-            type="button"
-            className="text-nerv-amber hover:text-nerv-orange transition-colors"
-            onClick={() => {
-              for (const f of derivedFiles) {
-                if (selectedIds.has(f.filePath)) toggleFavorite(f);
-              }
-            }}
-          >
-            Toggle Favorite
-          </button>
-          <button
-            type="button"
-            className="text-nerv-muted hover:text-nerv-red transition-colors"
-            onClick={clearSelection}
-          >
-            Clear Selection
-          </button>
-        </div>
-      )}
-
-      {/* Lightbox */}
-      {viewerIndex !== null && derivedFiles[viewerIndex] && (
-        <MediaViewer
-          file={derivedFiles[viewerIndex]}
-          files={derivedFiles}
-          index={viewerIndex}
-          onClose={() => {
-            setViewerIndex(null);
-            viewerFilePathRef.current = null;
-          }}
-          onNavigate={navigateViewer}
-          onNavigateTo={(i) => {
-            if (derivedFiles[i]) {
-              viewerFilePathRef.current = derivedFiles[i].filePath;
-              setViewerIndex(i);
-            }
-          }}
-        />
-      )}
-
       {contextMenu && (
         <ContextMenu
           position={{ x: contextMenu.x, y: contextMenu.y }}
@@ -894,8 +927,100 @@ export default function App() {
               onClick: () =>
                 void window.scanAPI.writeClipboard(contextMenu.file.fileName),
             },
+            { key: "sep-1" },
+            {
+              key: "move",
+              label: "Move to Folder...",
+              onClick: () => {
+                void handleMoveFile(contextMenu.file);
+                setContextMenu(null);
+              },
+            },
+            {
+              key: "rename",
+              label: "Rename...",
+              onClick: () => {
+                const newName = window.prompt("New file name", contextMenu.file.fileName);
+                if (newName && newName !== contextMenu.file.fileName) {
+                  void handleRenameFile(contextMenu.file, newName);
+                }
+                setContextMenu(null);
+              },
+            },
+            { key: "sep-2" },
+            {
+              key: "trash",
+              label: "Move to Trash",
+              onClick: () => {
+                void handleTrashFile(contextMenu.file);
+                setContextMenu(null);
+              },
+            },
           ]}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Floating batch action toolbar */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-nerv-panel border border-nerv-orange/60 rounded-lg px-4 py-2 flex items-center gap-4 text-xs font-mono animate-glow-orange">
+          <span className="text-nerv-orange font-bold">
+            {selectedIds.size} item(s) selected
+          </span>
+          <span className="w-px h-4 bg-nerv-border" />
+          <button
+            type="button"
+            className="text-nerv-amber hover:text-nerv-orange transition-colors"
+            onClick={() => {
+              for (const f of derivedFiles) {
+                if (selectedIds.has(f.filePath)) toggleFavorite(f);
+              }
+            }}
+          >
+            Toggle Favorite
+          </button>
+          <button
+            type="button"
+            className="text-nerv-lime hover:text-nerv-green transition-colors"
+            onClick={() => void handleMoveSelected()}
+          >
+            Move to Folder...
+          </button>
+          <button
+            type="button"
+            className="text-nerv-red hover:text-red-400 transition-colors"
+            onClick={() => void handleTrashSelected()}
+          >
+            Move to Trash
+          </button>
+          <span className="w-px h-4 bg-nerv-border" />
+          <button
+            type="button"
+            className="text-nerv-muted hover:text-nerv-text transition-colors"
+            onClick={clearSelection}
+          >
+            Clear Selection
+          </button>
+        </div>
+      )}
+
+      {/* Lightbox */}
+      {viewerIndex !== null && derivedFiles[viewerIndex] && (
+        <MediaViewer
+          file={derivedFiles[viewerIndex]}
+          files={derivedFiles}
+          index={viewerIndex}
+          onClose={() => {
+            setViewerIndex(null);
+            viewerFilePathRef.current = null;
+          }}
+          onNavigate={navigateViewer}
+          onNavigateTo={(i) => {
+            if (derivedFiles[i]) {
+              viewerFilePathRef.current = derivedFiles[i].filePath;
+              setViewerIndex(i);
+            }
+          }}
         />
       )}
 
