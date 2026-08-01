@@ -99,11 +99,9 @@ const MediaCard = memo(function MediaCard({
   onInspect,
 }: MediaCardProps) {
   const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
   const isVideo = file.fileType === "video";
-  const url = useMemo(
-    () => tileUrl(file, tileWidth),
-    [file, tileWidth],
-  );
+  const url = useMemo(() => tileUrl(file, tileWidth), [file, tileWidth]);
 
   return (
     <div
@@ -125,22 +123,35 @@ const MediaCard = memo(function MediaCard({
       style={{ aspectRatio: String(aspectRatio) }}
       title={file.fileName}
     >
-      {/* Shimmer skeleton until the image decodes. */}
-      {!loaded && (
-        <div className="shimmer absolute inset-0" aria-hidden="true" />
-      )}
+      {/* Error fallback — corrupt/unsupported files show a styled badge. */}
+      {error ? (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-nerv-panel border border-nerv-red/40 text-nerv-red gap-1">
+          <span className="font-mono text-[9px] font-bold tracking-wider">UNREADABLE</span>
+          <span className="text-[8px] text-nerv-muted truncate max-w-[80%]">
+            {file.fileType.toUpperCase()}
+          </span>
+        </div>
+      ) : (
+        <>
+          {/* Shimmer skeleton until the image decodes. */}
+          {!loaded && (
+            <div className="shimmer absolute inset-0" aria-hidden="true" />
+          )}
 
-      <img
-        src={url}
-        alt={file.fileName}
-        loading="lazy"
-        onLoad={() => setLoaded(true)}
-        className={[
-          "w-full h-full object-cover transition-all duration-300 group-hover:scale-105",
-          loaded ? "opacity-100" : "opacity-0",
-        ].join(" ")}
-        draggable={false}
-      />
+          <img
+            src={url}
+            alt={file.fileName}
+            loading="lazy"
+            onLoad={() => setLoaded(true)}
+            onError={() => setError(true)}
+            className={[
+              "w-full h-full object-cover transition-all duration-300 group-hover:scale-105",
+              loaded ? "opacity-100" : "opacity-0",
+            ].join(" ")}
+            draggable={false}
+          />
+        </>
+      )}
 
       {/* Top action overlay (revealed on hover). */}
       <div className="absolute top-1.5 left-1.5 right-1.5 flex items-start justify-between opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none">
@@ -597,16 +608,15 @@ const MasonryView = memo(function MasonryView({
   const visibleTiles = useMemo(() => {
     const out: Array<{ tile: PlacedTile; y: number }> = [];
     for (const s of sections) {
-      const headerOffset = showGroups ? HEADER_HEIGHT + GAP : 0;
       for (const tile of s.tiles) {
-        const absY = s.offsetY + headerOffset + tile.y - headerOffset;
+        const absY = s.offsetY + tile.y;
         if (absY + tile.height >= top && absY <= bottom) {
           out.push({ tile, y: absY });
         }
       }
     }
     return out;
-  }, [sections, top, bottom, showGroups]);
+  }, [sections, top, bottom]);
 
   const inspector = split ? (
     <InspectorCard file={activeInspectFile} onOpen={onOpenInspect} />
@@ -742,80 +752,55 @@ const GridView = memo(function GridView({
     return { headers, rows };
   }, [sections, allFiles, top, bottom, showGroups]);
 
+  const totalHeight =
+    sections.length > 0
+      ? sections[sections.length - 1].offsetY + sections[sections.length - 1].height
+      : 0;
+
   return (
-    <div className="relative w-full">
+    <div className="relative w-full" style={{ height: `${totalHeight}px` }}>
       {visible.headers.map((h) => (
-        <div key={`hdr-${h.label}`} style={{ height: HEADER_HEIGHT + GAP }}>
+        <div
+          key={`hdr-${h.label}`}
+          className="absolute left-0 w-full"
+          style={{ top: `${h.y}px`, height: `${HEADER_HEIGHT + GAP}px` }}
+        >
           <GroupLabel label={h.label} count={h.count} />
         </div>
       ))}
-      <div
-        className="grid gap-3"
-        style={{
-          gridTemplateColumns: `repeat(${sections[0]?.cols ?? 1}, minmax(0, 1fr))`,
-        }}
-      >
-        {visible.rows.map(({ section, rowIdx, files }) => (
-          <FragmentRow
-            key={`${section.label}-${rowIdx}`}
-            files={files}
-            selectedIds={selectedIds}
-            favorites={favorites}
-            onToggleSelect={onToggleSelect}
-            onOpen={onOpen}
-            onToggleFavorite={onToggleFavorite}
-            onContextMenu={onContextMenu}
-            onInspect={onInspect}
-            colWidth={section.colWidth}
-          />
-        ))}
-      </div>
+      {visible.rows.map(({ section, rowIdx, y, files }) => (
+        <div
+          key={`${section.label}-${rowIdx}`}
+          className="absolute flex"
+          style={{
+            top: `${y}px`,
+            left: `${PADDING}px`,
+            width: `${(section.colWidth + GAP) * section.cols - GAP}px`,
+            gap: `${GAP}px`,
+          }}
+        >
+          {files.map((file) => (
+            <div key={file.filePath} style={{ width: `${section.colWidth}px`, height: `${GRID_TILE_H}px` }}>
+              <MediaCard
+                file={file}
+                aspectRatio={1}
+                selected={selectedIds.has(file.filePath)}
+                favorite={favorites.has(file.filePath)}
+                tileWidth={section.colWidth}
+                onToggleSelect={onToggleSelect}
+                onOpen={onOpen}
+                onToggleFavorite={onToggleFavorite}
+                onContextMenu={onContextMenu}
+                onInspect={onInspect}
+              />
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   );
 });
 
-/** Renders one grid row's worth of tiles as a fragment of MediaCards. */
-const FragmentRow = memo(function FragmentRow({
-  files,
-  selectedIds,
-  favorites,
-  onToggleSelect,
-  onOpen,
-  onToggleFavorite,
-  onContextMenu,
-  onInspect,
-  colWidth,
-}: {
-  files: MediaFile[];
-  selectedIds: Set<string>;
-  favorites: Set<string>;
-  onToggleSelect: (filePath: string, e: React.MouseEvent) => void;
-  onOpen: (file: MediaFile) => void;
-  onToggleFavorite: (file: MediaFile) => void;
-  onContextMenu: (file: MediaFile, e: React.MouseEvent) => void;
-  onInspect: (file: MediaFile) => void;
-  colWidth: number;
-}) {
-  return (
-    <>
-      {files.map((file) => (
-        <MediaCard
-          key={file.filePath}
-          file={file}
-          aspectRatio={1}
-          selected={selectedIds.has(file.filePath)}
-          favorite={favorites.has(file.filePath)}
-          tileWidth={colWidth}
-          onToggleSelect={onToggleSelect}
-          onOpen={onOpen}
-          onToggleFavorite={onToggleFavorite}
-          onContextMenu={onContextMenu}
-          onInspect={onInspect}
-        />
-      ))}
-    </>
-  );
-});
 
 // ── List view ───────────────────────────────────────────────────────
 
@@ -860,11 +845,13 @@ const ListView = memo(function ListView({
   const bottom = scrollTop + viewportHeight + OVERSCAN;
 
   const visible = useMemo(() => {
-    const headers: Array<{ label: string; count: number }> = [];
+    const headers: Array<{ label: string; count: number; y: number }> = [];
     const rows: Array<{ file: MediaFile; y: number }> = [];
     for (const section of sections) {
       const headerOffset = showGroups ? HEADER_HEIGHT + GAP : 0;
-      if (showGroups) headers.push({ label: section.label, count: section.count });
+      if (showGroups && section.offsetY >= top && section.offsetY <= bottom) {
+        headers.push({ label: section.label, count: section.count, y: section.offsetY });
+      }
       const rowsStartY = section.offsetY + headerOffset;
       for (let r = 0; r < section.count; r++) {
         const rowY = rowsStartY + r * LIST_ROW_H;
@@ -876,128 +863,133 @@ const ListView = memo(function ListView({
     return { headers, rows };
   }, [sections, allFiles, top, bottom, showGroups]);
 
+  const totalHeight =
+    sections.length > 0
+      ? sections[sections.length - 1].offsetY + sections[sections.length - 1].height
+      : 0;
+
   return (
-    <div className="flex flex-col gap-3">
-      {showGroups &&
-        visible.headers.map((h) => (
-          <GroupLabel key={`hdr-${h.label}`} label={h.label} count={h.count} />
-        ))}
-      <div className="border border-nerv-border rounded overflow-hidden">
-        <table className="w-full border-collapse text-xs font-mono">
-          <thead>
-            <tr className="bg-nerv-panel text-nerv-muted text-left">
-              <th className="w-8 px-2 py-1.5 font-normal">
-                <span className="sr-only">Select</span>
-              </th>
-              <th className="w-12 px-2 py-1.5 font-normal">Preview</th>
-              <th className="px-2 py-1.5 font-normal">File Name</th>
-              <th className="px-2 py-1.5 font-normal">Type</th>
-              <th className="px-2 py-1.5 font-normal">Dimensions</th>
-              <th className="px-2 py-1.5 font-normal">Size</th>
-              <th className="px-2 py-1.5 font-normal">Date</th>
-              <th className="px-2 py-1.5 font-normal text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.rows.map(({ file }) => {
-              const selected = selectedIds.has(file.filePath);
-              const favorite = favorites.has(file.filePath);
-              const isVideo = file.fileType === "video";
-              return (
-                <tr
-                  key={file.filePath}
-                  onClick={() => onInspect(file)}
-                  onDoubleClick={() => onOpen(file)}
-                  onContextMenu={(e) => onContextMenu(file, e)}
-                  className={[
-                    "border-t border-nerv-border transition-colors cursor-pointer align-middle",
-                    selected
-                      ? "bg-nerv-orange/10"
-                      : "hover:bg-nerv-panel-2/80",
-                  ].join(" ")}
-                  style={{ height: LIST_ROW_H }}
-                >
-                  <td className="px-2 py-1 text-center">
-                    <input
-                      type="checkbox"
-                      checked={selected}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onToggleSelect(file.filePath, e);
-                      }}
-                      className="accent-nerv-orange w-3.5 h-3.5 cursor-pointer"
-                    />
-                  </td>
-                  <td className="px-2 py-1">
-                    <img
-                      src={tileUrl(file, 40)}
-                      alt=""
-                      loading="lazy"
-                      className="w-10 h-10 object-cover rounded border border-nerv-border"
-                      draggable={false}
-                    />
-                  </td>
-                  <td className="px-2 py-1 text-nerv-text truncate max-w-[280px]">
-                    {file.fileName}
-                  </td>
-                  <td className="px-2 py-1">
-                    {isVideo ? (
-                      <span className="px-1.5 py-0.5 rounded bg-nerv-green/20 border border-nerv-green/50 text-nerv-green text-[10px] font-bold tracking-wider">
-                        VID
-                      </span>
-                    ) : (
-                      <span className="px-1.5 py-0.5 rounded bg-nerv-cyan/20 border border-nerv-cyan/50 text-nerv-cyan text-[10px] font-bold tracking-wider">
-                        IMG
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-2 py-1 text-nerv-muted">
-                    {file.width > 0 && file.height > 0
-                      ? `${file.width}x${file.height}`
-                      : "\u2014"}
-                  </td>
-                  <td className="px-2 py-1 text-nerv-amber">
-                    {formatBytes(file.sizeBytes)}
-                  </td>
-                  <td className="px-2 py-1 text-nerv-muted">
-                    {formatDate(file.birthtimeMs)}
-                  </td>
-                  <td className="px-2 py-1">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <button
-                        type="button"
-                        aria-label="Toggle favorite"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onToggleFavorite(file);
-                        }}
-                        className={[
-                          "w-6 h-6 rounded-full flex items-center justify-center text-[13px] leading-none transition-colors",
-                          favorite
-                            ? "text-nerv-amber"
-                            : "text-nerv-muted hover:text-nerv-amber",
-                        ].join(" ")}
-                      >
-                        {"\u2605"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onOpen(file);
-                        }}
-                        className="px-2 py-0.5 rounded border border-nerv-orange/50 text-nerv-orange text-[10px] font-bold hover:bg-nerv-orange/10 transition-colors"
-                      >
-                        OPEN
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+    <div className="relative w-full" style={{ height: `${totalHeight}px` }}>
+      {/* Sticky-ish column header at the top of the scroll area */}
+      <div
+        className="absolute left-0 right-0 z-10 flex items-center bg-nerv-panel text-nerv-muted text-[10px] font-mono font-normal border-b border-nerv-border"
+        style={{ top: 0, height: `${HEADER_HEIGHT}px`, paddingLeft: `${PADDING}px`, paddingRight: `${PADDING}px` }}
+      >
+        <span className="w-8" />
+        <span className="w-12">PREV</span>
+        <span className="flex-1">FILE NAME</span>
+        <span className="w-12">TYPE</span>
+        <span className="w-24">DIMENSIONS</span>
+        <span className="w-20">SIZE</span>
+        <span className="w-28">DATE</span>
+        <span className="w-20 text-right">ACTIONS</span>
       </div>
+
+      {/* Group headers — positioned at each section's offsetY */}
+      {visible.headers.map((h) => (
+        <div
+          key={`hdr-${h.label}`}
+          className="absolute left-0 w-full"
+          style={{ top: `${h.y}px`, height: `${HEADER_HEIGHT + GAP}px` }}
+        >
+          <GroupLabel label={h.label} count={h.count} />
+        </div>
+      ))}
+
+      {/* Visible rows — absolutely positioned so scrolling never jumps */}
+      {visible.rows.map(({ file, y }) => {
+        const selected = selectedIds.has(file.filePath);
+        const favorite = favorites.has(file.filePath);
+        const isVideo = file.fileType === "video";
+        return (
+          <div
+            key={file.filePath}
+            onClick={() => onInspect(file)}
+            onDoubleClick={() => onOpen(file)}
+            onContextMenu={(e) => onContextMenu(file, e)}
+            className={[
+              "absolute left-0 flex items-center border-t border-nerv-border transition-colors cursor-pointer",
+              selected ? "bg-nerv-orange/10" : "hover:bg-nerv-panel-2/80",
+            ].join(" ")}
+            style={{
+              top: `${y}px`,
+              height: `${LIST_ROW_H}px`,
+              paddingLeft: `${PADDING}px`,
+              paddingRight: `${PADDING}px`,
+            }}
+          >
+            <div className="w-8 shrink-0 text-center">
+              <input
+                type="checkbox"
+                checked={selected}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleSelect(file.filePath, e);
+                }}
+                className="accent-nerv-orange w-3.5 h-3.5 cursor-pointer"
+              />
+            </div>
+            <div className="w-12 shrink-0">
+              <img
+                src={tileUrl(file, 40)}
+                alt=""
+                loading="lazy"
+                className="w-10 h-10 object-cover rounded border border-nerv-border"
+                draggable={false}
+              />
+            </div>
+            <span className="flex-1 min-w-0 text-nerv-text truncate text-xs font-mono">
+              {file.fileName}
+            </span>
+            <span className="w-12 shrink-0 text-center">
+              {isVideo ? (
+                <span className="px-1 py-0.5 bg-nerv-green/20 border border-nerv-green/50 text-nerv-green text-[9px] font-bold">
+                  VID
+                </span>
+              ) : (
+                <span className="px-1 py-0.5 bg-nerv-cyan/20 border border-nerv-cyan/50 text-nerv-cyan text-[9px] font-bold">
+                  IMG
+                </span>
+              )}
+            </span>
+            <span className="w-24 shrink-0 text-nerv-muted text-[10px] font-mono tabular-nums">
+              {file.width > 0 && file.height > 0 ? `${file.width}x${file.height}` : "\u2014"}
+            </span>
+            <span className="w-20 shrink-0 text-nerv-amber text-[10px] font-mono tabular-nums">
+              {formatBytes(file.sizeBytes)}
+            </span>
+            <span className="w-28 shrink-0 text-nerv-muted text-[10px] font-mono">
+              {formatDate(file.birthtimeMs)}
+            </span>
+            <span className="w-20 shrink-0 flex items-center justify-end gap-1">
+              <button
+                type="button"
+                aria-label="Toggle favorite"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFavorite(file);
+                }}
+                className={[
+                  "w-5 h-5 flex items-center justify-center text-[12px] leading-none transition-colors",
+                  favorite ? "text-nerv-amber" : "text-nerv-muted hover:text-nerv-amber",
+                ].join(" ")}
+              >
+                {"\u2605"}
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpen(file);
+                }}
+                className="px-1.5 py-0.5 border border-nerv-orange/50 text-nerv-orange text-[9px] font-bold hover:bg-nerv-orange/10 transition-colors"
+              >
+                OPEN
+              </button>
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 });

@@ -509,7 +509,7 @@ export default function App() {
       groups: outGroups,
       resultCount: filteredCount,
     };
-  }, [files, selectedFolder, typeFilter, favorites, debouncedQuery, groupMode, sortMode, sortDir]);
+  }, [files, selectedFolder, typeFilter, typeFilter === "favorite" ? favorites : null, debouncedQuery, groupMode, sortMode, sortDir]);
 
   // Keep a live ref of derivedFiles for the viewer navigation handler.
   // (derivedFilesRef itself is declared alongside the handlers above.)

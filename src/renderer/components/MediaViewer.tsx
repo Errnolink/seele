@@ -166,6 +166,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
     const [zoom, setZoom] = useState(1);
     const [pan, setPan] = useState<PanOffset>({ x: 0, y: 0 });
     const [isPanning, setIsPanning] = useState(false);
+    const [fullResLoaded, setFullResLoaded] = useState(false);
     const panStart = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
 
     // ── ui state ──
@@ -382,11 +383,18 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
     // the full ~250MB. Only when the user zooms in do we load the raw
     // file so the transform reveals real detail.
     const VIEWER_PREVIEW_W = 2560;
-    const mediaUrl = React.useMemo(() => {
+    const previewUrl = React.useMemo(() => {
       const base = toMediaUrl(file.filePath);
-      if (isVideo || zoom > 1) return base;
-      return `${base}?w=${VIEWER_PREVIEW_W}`;
-    }, [file.filePath, isVideo, zoom]);
+      return isVideo ? base : `${base}?w=${VIEWER_PREVIEW_W}`;
+    }, [file.filePath, isVideo]);
+    const fullResUrl = React.useMemo(
+      () => toMediaUrl(file.filePath),
+      [file.filePath],
+    );
+    // Reset full-res state whenever the file changes (new image).
+    useEffect(() => {
+      setFullResLoaded(false);
+    }, [file.filePath]);
 
     const cursorClass = isVideo
       ? ""
@@ -478,28 +486,51 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
               <video
                 ref={videoRef}
                 key={file.filePath}
-                src={mediaUrl}
+                src={previewUrl}
                 controls
                 tabIndex={0}
                 className="max-h-[78vh] max-w-[82vw] outline-none"
                 style={{ border: "1px solid rgba(255,85,0,0.2)" }}
               />
             ) : (
-              <img
-                key={file.filePath}
-                src={mediaUrl}
-                alt={file.fileName}
-                decoding="async"
-                draggable={false}
-                onClick={handleImageClick}
-                onMouseDown={handleMouseDown}
-                className={`max-h-[78vh] max-w-[82vw] ${cursorClass}`}
-                style={{
-                  transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
-                  transformOrigin: "center",
-                  willChange: zoom > 1 ? "transform" : "auto",
-                }}
-              />
+              <div className="relative" style={{ maxWidth: "82vw", maxHeight: "78vh" }}>
+                {/* Base preview layer — always visible, no blank flash on zoom */}
+                <img
+                  key={`prev-${file.filePath}`}
+                  src={previewUrl}
+                  alt={file.fileName}
+                  decoding="async"
+                  draggable={false}
+                  onClick={handleImageClick}
+                  onMouseDown={handleMouseDown}
+                  className={`max-h-[78vh] max-w-[82vw] ${cursorClass}`}
+                  style={{
+                    transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+                    transformOrigin: "center",
+                    willChange: zoom > 1 ? "transform" : "auto",
+                  }}
+                />
+                {/* Full-resolution detail layer — fades in on top when zoomed.
+                    Sits invisible until loaded so the preview underneath stays
+                    on screen (no flicker). */}
+                {zoom > 1 && (
+                  <img
+                    key={`full-${file.filePath}`}
+                    src={fullResUrl}
+                    alt=""
+                    decoding="async"
+                    draggable={false}
+                    onLoad={() => setFullResLoaded(true)}
+                    className={`absolute inset-0 max-h-[78vh] max-w-[82vw] transition-opacity duration-200 ${cursorClass}`}
+                    style={{
+                      opacity: fullResLoaded ? 1 : 0,
+                      transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+                      transformOrigin: "center",
+                      willChange: "transform",
+                    }}
+                  />
+                )}
+              </div>
             )}
           </div>
 
