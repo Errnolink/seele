@@ -947,7 +947,7 @@ export default function App() {
               </div>
               <button
                 type="button"
-                className="mt-2 px-5 py-2 bg-nerv-orange hover:bg-nerv-amber text-nerv-bg font-mono font-bold text-xs uppercase transition-all duration-150 cursor-pointer shadow-[0_0_12px_rgba(255,85,0,0.3)]"
+                className="mt-2 px-5 py-2 bg-nerv-orange hover:bg-nerv-amber text-nerv-bg font-mono font-bold text-xs uppercase transition-all duration-150 cursor-pointer shadow-[0_0_12px_rgba(255,152,48,0.3)]"
                 onClick={pickFolder}
               >
                 Open folder...

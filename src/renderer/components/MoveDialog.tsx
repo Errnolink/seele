@@ -117,7 +117,7 @@ export const MoveDialog: React.FC<MoveDialogProps> = ({
       onClick={onClose}
     >
       <div
-        className="w-[520px] max-h-[75vh] flex flex-col bg-nerv-panel border border-nerv-orange/50 rounded-lg shadow-[0_0_30px_rgba(255,85,0,0.2)]"
+        className="w-[520px] max-h-[75vh] flex flex-col bg-nerv-panel border border-nerv-orange/50 shadow-[0_0_30px_rgba(255,152,48,0.2)]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

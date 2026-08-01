@@ -150,7 +150,7 @@ const MediaCard = memo(function MediaCard({
         "group relative rounded border overflow-hidden transition-all duration-200 cursor-pointer bg-nerv-panel select-none",
         mayHaveAlpha && "thumb-checkerboard",
         selected
-          ? "border-nerv-orange ring-2 ring-nerv-orange/50 shadow-[0_0_15px_rgba(255,85,0,0.3)]"
+          ? "border-nerv-orange ring-2 ring-nerv-orange/50 shadow-[0_0_15px_rgba(255,152,48,0.3)]"
           : "border-nerv-border hover:border-nerv-orange/70 hover:shadow-lg",
       ].join(" ")}
       style={{ aspectRatio: String(aspectRatio) }}
@@ -1061,15 +1061,15 @@ interface InspectorCardProps {
 
 const InspectorCard = memo(function InspectorCard({ file, onOpen }: InspectorCardProps) {
   return (
-    <div className="w-80 shrink-0 border border-nerv-border rounded bg-nerv-panel p-4 flex flex-col gap-4 font-mono text-xs h-fit sticky top-0">
+    <div className="w-80 shrink-0 border border-nerv-border bg-nerv-panel p-4 flex flex-col gap-4 font-mono text-xs h-fit sticky top-0 eva-corner">
       <div className="flex items-center justify-between">
-        <span className="text-nerv-orange font-bold tracking-wider">
-          MEDIA INSPECTOR
+        <span className="eva-title text-nerv-orange font-bold tracking-wider text-[13px]">
+          INSPECTOR
         </span>
         {file && (
           <span
             className={[
-              "px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wider border",
+              "tag-chip px-1.5 py-0.5 text-[10px] font-bold tracking-wider border",
               file.fileType === "video"
                 ? "bg-nerv-green/20 border-nerv-green/50 text-nerv-green"
                 : "bg-nerv-cyan/20 border-nerv-cyan/50 text-nerv-cyan",
@@ -1082,7 +1082,7 @@ const InspectorCard = memo(function InspectorCard({ file, onOpen }: InspectorCar
 
       {file ? (
         <>
-          <div className="aspect-video w-full bg-nerv-bg rounded overflow-hidden border border-nerv-border flex items-center justify-center">
+          <div className="aspect-video w-full bg-nerv-bg overflow-hidden border border-nerv-border flex items-center justify-center relative">
             <img
               src={window.scanAPI.toMediaUrl(file.filePath)}
               alt={file.fileName}
@@ -1090,6 +1090,11 @@ const InspectorCard = memo(function InspectorCard({ file, onOpen }: InspectorCar
               className="w-full h-full object-contain"
               draggable={false}
             />
+            {/* Corner reticle ticks */}
+            <span className="absolute top-1 left-1 w-2 h-2 border-t border-l border-nerv-orange/60" />
+            <span className="absolute top-1 right-1 w-2 h-2 border-t border-r border-nerv-orange/60" />
+            <span className="absolute bottom-1 left-1 w-2 h-2 border-b border-l border-nerv-orange/60" />
+            <span className="absolute bottom-1 right-1 w-2 h-2 border-b border-r border-nerv-orange/60" />
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-nerv-text font-bold break-all">
@@ -1107,7 +1112,7 @@ const InspectorCard = memo(function InspectorCard({ file, onOpen }: InspectorCar
               valueClass="text-nerv-amber"
             />
             <Stat
-              label="Megapixels"
+ label="Megapixels"
               value={
                 file.width > 0 && file.height > 0
                   ? `${((file.width * file.height) / 1e6).toFixed(1)} MP`
@@ -1119,9 +1124,9 @@ const InspectorCard = memo(function InspectorCard({ file, onOpen }: InspectorCar
           <button
             type="button"
             onClick={() => onOpen(file)}
-            className="w-full py-2 bg-nerv-orange text-nerv-bg font-bold rounded hover:bg-nerv-orange/90 transition-colors"
+            className="eva-sqbtn w-full py-2 bg-nerv-orange text-nerv-bg font-bold hover:bg-nerv-orange/90 transition-colors"
           >
-            Launch Full Screen Lightbox
+            LAUNCH FULL-SCREEN LIGHTBOX
           </button>
         </>
       ) : (
@@ -1143,7 +1148,7 @@ const Stat = memo(function Stat({
   valueClass?: string;
 }) {
   return (
-    <div className="bg-nerv-bg p-2.5 rounded border border-nerv-border text-[11px]">
+    <div className="bg-nerv-bg p-2.5 border border-nerv-border text-[11px]">
       <div className="text-nerv-muted text-[9px] uppercase tracking-wider">
         {label}
       </div>

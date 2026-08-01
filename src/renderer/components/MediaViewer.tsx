@@ -90,7 +90,7 @@ const FilmstripThumb: React.FC<FilmstripThumbProps> = memo(
         className={[
           "relative h-14 w-14 flex-shrink-0 overflow-hidden border transition-all duration-150",
           active
-            ? "border-nerv-orange shadow-[0_0_8px_rgba(255,85,0,0.4)] ring-1 ring-nerv-orange/40"
+            ? "border-nerv-orange shadow-[0_0_8px_rgba(255,152,48,0.4)] ring-1 ring-nerv-orange/40"
             : "border-nerv-border opacity-60 hover:opacity-100 hover:border-nerv-amber",
         ].join(" ")}
         title={file.fileName}
@@ -433,7 +433,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
         {/* ── top bar ── */}
         <div className={`titlebar-drag relative z-20 flex h-12 items-center justify-between border-b border-nerv-orange/20 bg-nerv-panel px-4 transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
           <div className="flex items-center gap-3">
-            <span className="font-display text-sm font-bold uppercase tracking-widest text-nerv-orange">
+            <span className="eva-title font-display text-sm font-bold uppercase tracking-widest text-nerv-orange">
               File Viewer
             </span>
             {totalCount > 1 && (
@@ -495,7 +495,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             <button
               type="button"
               onClick={onClose}
-              className="border border-nerv-amber/50 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-amber transition-all hover:bg-nerv-amber/10 hover:shadow-[0_0_8px_rgba(255,170,0,0.2)]"
+              className="border border-nerv-amber/50 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-amber transition-all hover:bg-nerv-amber/10 hover:shadow-[0_0_8px_rgba(255,183,0,0.2)]"
             >
               ✕ Close
             </button>
@@ -515,7 +515,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             <button
               type="button"
               onClick={() => navigate("prev")}
-              className={`absolute left-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-all duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,85,0,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
+              className={`absolute left-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-all duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,152,48,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
               title="Previous (←)"
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -539,7 +539,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                 tabIndex={0}
                 preload="metadata"
                 className="max-h-[78vh] max-w-[82vw] outline-none"
-                style={{ border: "1px solid rgba(255,85,0,0.2)" }}
+                style={{ border: "1px solid rgba(255,152,48,0.2)" }}
               />
             ) : (
               <div className="relative thumb-checkerboard" style={{ maxWidth: "82vw", maxHeight: "78vh" }}>
@@ -588,7 +588,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             <button
               type="button"
               onClick={() => navigate("next")}
-              className={`absolute right-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-all duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,85,0,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
+              className={`absolute right-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-all duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,152,48,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
               title="Next (→)"
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
