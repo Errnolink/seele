@@ -92,6 +92,11 @@ export interface ScanAPI {
   renameFile(filePath: string, newName: string): Promise<{ filePath: string; ok: boolean; newPath?: string; error?: string }>;
   createFolder(dirPath: string): Promise<{ ok: boolean; error?: string }>;
   pickMoveTarget(defaultPath?: string): Promise<string | null>;
+
+  // ── Window controls (custom titlebar) ──
+  winMinimize(): void;
+  winMaximize(): void;
+  winClose(): void;
 }
 
 const api: ScanAPI = {
@@ -170,6 +175,11 @@ const api: ScanAPI = {
   renameFile: (filePath, newName) => ipcRenderer.invoke("file:rename", filePath, newName),
   createFolder: (dirPath) => ipcRenderer.invoke("folder:create", dirPath),
   pickMoveTarget: (defaultPath) => ipcRenderer.invoke("dialog:pickMoveTarget", defaultPath),
+
+  // Window controls (custom titlebar).
+  winMinimize: () => ipcRenderer.send("win:minimize"),
+  winMaximize: () => ipcRenderer.send("win:maximize"),
+  winClose: () => ipcRenderer.send("win:close"),
 };
 
 contextBridge.exposeInMainWorld("scanAPI", api);

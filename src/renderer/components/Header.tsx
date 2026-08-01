@@ -191,7 +191,6 @@ export function Header(props: HeaderProps) {
       {/* Row 1 — titlebar drag region; 160px clears Windows caption buttons. */}
       <div
         className="titlebar-drag eva-top-bar h-12 px-3 flex items-center justify-between border-b border-nerv-purple/40 gap-3"
-        style={{ paddingRight: 160 }}
       >
         {/* Left cluster: sidebar toggle + brand + folder + scan */}
         <div className="flex items-center gap-3 min-w-0">

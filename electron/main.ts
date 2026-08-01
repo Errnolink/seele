@@ -29,15 +29,7 @@ function createWindow(): void {
     minWidth: 800,
     minHeight: 600,
     show: false,
-    // Custom frameless titlebar (UX-14). On Windows, `titleBarOverlay`
-    // reserves a small caption area for native min/max/close buttons
-    // overlaying our titlebar, so window controls still work.
-    titleBarStyle: "hidden",
-    titleBarOverlay: {
-      color: "#0a0a0a",
-      symbolColor: "#e0530a",
-      height: 48,
-    },
+    frame: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -60,6 +52,15 @@ function createWindow(): void {
     mainWindow = null;
   });
 }
+
+// ── Window controls (custom titlebar) ──────────────────────────────
+ipcMain.on("win:minimize", () => mainWindow?.minimize());
+ipcMain.on("win:maximize", () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+});
+ipcMain.on("win:close", () => mainWindow?.close());
 
 // Privileged scheme: lets the (sandboxed) renderer load local image/video
 // thumbnails via `media://local/<encoded-path>` without a file:// origin.

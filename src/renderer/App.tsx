@@ -8,6 +8,8 @@ import CommandPalette from "./components/CommandPalette";
 import { KeyboardHelp } from "./components/KeyboardHelp";
 import AnalyticsModal from "./components/AnalyticsModal";
 import BootSequence from "./components/BootSequence";
+import MoveDialog from "./components/MoveDialog";
+import TitleBar from "./components/TitleBar";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { formatBytes } from "./utils";
 import { useScanState } from "./hooks/useScanState";
@@ -308,31 +310,38 @@ export default function App() {
 
   // ---- file operations (organize & move) ----
 
-  /** Move a single file to a folder picked via native dialog. */
-  const handleMoveFile = useCallback(async (file: MediaFile) => {
-    const dest = await window.scanAPI.pickMoveTarget(folder ?? undefined);
-    if (!dest) return;
-    const result = await window.scanAPI.moveFile(file.filePath, dest);
-    if (result.ok) {
-      onRemoveFiles(new Set([file.filePath]));
-    }
-  }, [folder, onRemoveFiles]);
+  /** State for the in-app move dialog: null = closed, or the file paths to move. */
+  const [moveDialogPaths, setMoveDialogPaths] = useState<string[] | null>(null);
 
-  /** Move all selected files to a folder picked via native dialog. */
-  const handleMoveSelected = useCallback(async () => {
+  /** Open the move dialog for a single file (from context menu). */
+  const handleMoveFile = useCallback((file: MediaFile) => {
+    setMoveDialogPaths([file.filePath]);
+  }, []);
+
+  /** Open the move dialog for all selected files (from batch toolbar). */
+  const handleMoveSelected = useCallback(() => {
     if (selectedIds.size === 0) return;
-    const dest = await window.scanAPI.pickMoveTarget(folder ?? undefined);
-    if (!dest) return;
-    const paths = [...selectedIds];
-    const results = await window.scanAPI.moveFiles(paths, dest);
+    setMoveDialogPaths([...selectedIds]);
+  }, [selectedIds]);
+
+  /** Execute the move once the user picks a destination in the dialog. */
+  const handleMoveConfirm = useCallback(async (destDir: string) => {
+    const paths = moveDialogPaths;
+    setMoveDialogPaths(null);
+    if (!paths || paths.length === 0) return;
+    const results = await window.scanAPI.moveFiles(paths, destDir);
     const moved = new Set(
       results.filter((r) => r.ok).map((r) => r.filePath),
     );
     if (moved.size > 0) {
       onRemoveFiles(moved);
-      setSelectedIds(new Set());
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const p of moved) next.delete(p);
+        return next;
+      });
     }
-  }, [selectedIds, folder, onRemoveFiles]);
+  }, [moveDialogPaths, onRemoveFiles]);
 
   /** Move files to a specific known directory (sidebar drop / quick move). */
   const handleMoveToDir = useCallback(async (filePaths: string[], destDir: string) => {
@@ -675,6 +684,8 @@ export default function App() {
         />
       )}
 
+      <TitleBar folder={folder} />
+
       {/* Drag-and-drop overlay */}
       {isDragOver && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-nerv-bg/90 backdrop-blur-sm border-2 border-dashed border-nerv-orange pointer-events-none">
@@ -963,43 +974,67 @@ export default function App() {
 
       {/* Floating batch action toolbar */}
       {selectedIds.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-nerv-panel border border-nerv-orange/60 rounded-lg px-4 py-2 flex items-center gap-4 text-xs font-mono animate-glow-orange">
-          <span className="text-nerv-orange font-bold">
-            {selectedIds.size} item(s) selected
-          </span>
-          <span className="w-px h-4 bg-nerv-border" />
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-stretch shadow-[0_4px_24px_rgba(0,0,0,0.5)]">
+          {/* Counter badge */}
+          <div className="eva-ticket flex items-center gap-2 px-4 bg-nerv-orange/15 border border-nerv-orange">
+            <span className="text-nerv-orange font-bold text-sm tabular-nums">
+              {String(selectedIds.size).padStart(3, "0")}
+            </span>
+            <span className="text-[9px] font-mono tracking-widest uppercase text-nerv-amber">
+              Selected
+            </span>
+          </div>
+
+          {/* Actions */}
           <button
             type="button"
-            className="text-nerv-amber hover:text-nerv-orange transition-colors"
+            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-amber/60 hover:bg-nerv-amber/5 transition-all group"
             onClick={() => {
               for (const f of derivedFiles) {
                 if (selectedIds.has(f.filePath)) toggleFavorite(f);
               }
             }}
           >
-            Toggle Favorite
+            <span className="text-nerv-amber text-xs">★</span>
+            <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-nerv-text group-hover:text-nerv-amber">
+              Fav
+            </span>
           </button>
+
           <button
             type="button"
-            className="text-nerv-lime hover:text-nerv-green transition-colors"
+            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-lime/60 hover:bg-nerv-lime/5 transition-all group"
             onClick={() => void handleMoveSelected()}
           >
-            Move to Folder...
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="text-nerv-lime">
+              <path d="M2 8h9M7 4l4 4-4 4M14 3v10" />
+            </svg>
+            <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-nerv-text group-hover:text-nerv-lime">
+              Move
+            </span>
           </button>
+
           <button
             type="button"
-            className="text-nerv-red hover:text-red-400 transition-colors"
+            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-red/60 hover:bg-nerv-red/5 transition-all group"
             onClick={() => void handleTrashSelected()}
           >
-            Move to Trash
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="text-nerv-red">
+              <path d="M3 5h10M6 5V3h4v2M5 5l1 9h4l1-9" />
+            </svg>
+            <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-nerv-text group-hover:text-nerv-red">
+              Trash
+            </span>
           </button>
-          <span className="w-px h-4 bg-nerv-border" />
+
           <button
             type="button"
-            className="text-nerv-muted hover:text-nerv-text transition-colors"
+            className="eva-ticket px-3 flex items-center bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-muted hover:bg-nerv-panel-2 transition-all group"
             onClick={clearSelection}
           >
-            Clear Selection
+            <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-nerv-muted group-hover:text-nerv-text">
+              ✕
+            </span>
           </button>
         </div>
       )}
@@ -1021,6 +1056,21 @@ export default function App() {
               setViewerIndex(i);
             }
           }}
+          onMove={handleMoveFile}
+          onRename={(f) => {
+            const newName = window.prompt("New file name", f.fileName);
+            if (newName && newName !== f.fileName) void handleRenameFile(f, newName);
+          }}
+          onTrash={handleTrashFile}
+        />
+      )}
+
+      {moveDialogPaths && folderTree && (
+        <MoveDialog
+          tree={folderTree}
+          count={moveDialogPaths.length}
+          onClose={() => setMoveDialogPaths(null)}
+          onConfirm={handleMoveConfirm}
         />
       )}
 

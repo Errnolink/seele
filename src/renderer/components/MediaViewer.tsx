@@ -33,6 +33,12 @@ export interface MediaViewerProps {
   /** Jump directly to an absolute index (filmstrip click). O(1) instead
    * of calling onNavigate N times (v4 review M-2). */
   onNavigateTo?: (index: number) => void;
+  /** Move the current file (context menu / toolbar). */
+  onMove?: (file: MediaFile) => void;
+  /** Rename the current file. */
+  onRename?: (file: MediaFile) => void;
+  /** Trash the current file. */
+  onTrash?: (file: MediaFile) => void;
 }
 
 /** Format a date string (ISO or epoch) into a compact, readable form. */
@@ -149,15 +155,13 @@ function MetaItem({
 /**
  * Fullscreen lightbox overlay for images and videos.
  *
- * v4 rework:
  * - Filmstrip navigation (horizontal scrollable thumbnails)
- * - Click-to-zoom + drag-to-pan for images
  * - Full keyboard control with visible hints
  * - Rich metadata panel (size, date, path, type)
  * - Cleaner composition, less visual noise
  */
 export const MediaViewer: React.FC<MediaViewerProps> = memo(
-  ({ file, files, index, onClose, onNavigate, onNavigateTo }) => {
+  ({ file, files, index, onClose, onNavigate, onNavigateTo, onMove, onRename, onTrash }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const mediaContainerRef = useRef<HTMLDivElement>(null);
     const filmstripRef = useRef<HTMLDivElement>(null);
@@ -417,7 +421,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
         <CornerTicks size={14} />
 
         {/* ── top bar ── */}
-        <div className={`titlebar-drag relative z-20 flex h-12 items-center justify-between border-b border-nerv-orange/20 bg-nerv-panel pl-4 transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`} style={{ paddingRight: "160px" }}>
+        <div className={`titlebar-drag relative z-20 flex h-12 items-center justify-between border-b border-nerv-orange/20 bg-nerv-panel px-4 transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
           <div className="flex items-center gap-3">
             <span className="font-display text-sm font-bold uppercase tracking-widest text-nerv-orange">
               File Viewer
@@ -444,6 +448,39 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             >
               {showMetadata ? "Hide Info" : "Show Info"}
             </button>
+
+            {/* file operations */}
+            {onMove && (
+              <button
+                type="button"
+                onClick={() => onMove(file)}
+                className="border border-nerv-lime/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-lime transition-all hover:bg-nerv-lime/10 hover:border-nerv-lime/80"
+              >
+                ⇥ Move
+              </button>
+            )}
+            {onRename && (
+              <button
+                type="button"
+                onClick={() => onRename(file)}
+                className="border border-nerv-cyan/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-cyan transition-all hover:bg-nerv-cyan/10 hover:border-nerv-cyan/80"
+              >
+                ✎ Rename
+              </button>
+            )}
+            {onTrash && (
+              <button
+                type="button"
+                onClick={() => {
+                  onTrash(file);
+                  onClose();
+                }}
+                className="border border-nerv-red/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-red transition-all hover:bg-nerv-red/10 hover:border-nerv-red/80"
+              >
+                ⌫ Trash
+              </button>
+            )}
+
             {/* close */}
             <button
               type="button"
