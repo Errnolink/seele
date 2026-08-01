@@ -13,6 +13,7 @@ const SHORTCUTS: { section: string; entries: ShortcutEntry[] }[] = [
       { keys: ["Ctrl", "Enter"], label: "Start scan" },
       { keys: ["Esc"], label: "Close viewer / clear search / clear folder" },
       { keys: ["←", "→"], label: "Previous / next in viewer" },
+      { keys: ["R"], label: "Reload failed thumbnails" },
     ],
   },
   {

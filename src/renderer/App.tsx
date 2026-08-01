@@ -159,6 +159,8 @@ export default function App() {
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isDragOver, setIsDragOver] = useState(false);
+  /** Bumped by the R key; forces errored tiles to re-fetch their thumbnail. */
+  const [reloadEpoch, setReloadEpoch] = useState(0);
 
   const debouncedQuery = useDebouncedValue(searchQuery, SEARCH_DEBOUNCE_MS);
 
@@ -567,6 +569,12 @@ export default function App() {
           const newName = window.prompt("New file name", f.fileName);
           if (newName && newName !== f.fileName) void handleRenameFile(f, newName);
         }
+        return;
+      }
+      // R — reload failed thumbnails (errored tiles re-fetch via cache-buster)
+      if (e.key.toLowerCase() === "r" && !inEditable && viewerIndexRef.current === null) {
+        e.preventDefault();
+        setReloadEpoch((n) => n + 1);
         return;
       }
     };
@@ -980,6 +988,7 @@ export default function App() {
                 if (viewMode !== "split") openViewer(file);
               }}
               activeInspectFile={activeInspectFile}
+              reloadEpoch={reloadEpoch}
             />
           )}
         </main>

@@ -15,6 +15,7 @@
 import React, {
   memo,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -58,13 +59,16 @@ export interface MasonryGridProps {
   onContextMenu: (file: MediaFile, e: React.MouseEvent) => void;
   onInspect: (file: MediaFile) => void;
   activeInspectFile: MediaFile | null;
+  /** Incremented to force re-fetch of failed tile thumbnails. */
+  reloadEpoch: number;
 }
 
 /** Build a media URL for a tile, requesting a sharp thumbnail for images. */
 function tileUrl(file: MediaFile, tileWidth: number): string {
   const base = window.scanAPI.toMediaUrl(file.filePath);
-  if (file.fileType === "video") return base;
   const w = Math.min(THUMB_MAX, Math.max(THUMB_MIN, Math.round(tileWidth * 1.5)));
+  // Both images and videos get ?w= — the main process routes video
+  // thumbnails through ffmpeg frame extraction.
   return `${base}?w=${w}`;
 }
 
@@ -77,21 +81,23 @@ interface MediaCardProps {
   selected: boolean;
   favorite: boolean;
   tileWidth: number;
+  /** Incremented by the parent to force a re-fetch of errored tiles only.
+   *  Loaded tiles keep their cached URL; only tiles in the error state
+   *  reset and re-request with a cache-busting query. */
+  reloadEpoch: number;
   onToggleSelect: (filePath: string, e: React.MouseEvent) => void;
   onOpen: (file: MediaFile) => void;
   onToggleFavorite: (file: MediaFile) => void;
   onContextMenu: (file: MediaFile, e: React.MouseEvent) => void;
   onInspect: (file: MediaFile) => void;
 }
-
-/** Memoized grid tile. Parent passes stable callbacks so the card only
- * re-renders when `file`, `selected`, or `favorite` change. */
 const MediaCard = memo(function MediaCard({
   file,
   aspectRatio,
   selected,
   favorite,
   tileWidth,
+  reloadEpoch,
   onToggleSelect,
   onOpen,
   onToggleFavorite,
@@ -101,7 +107,20 @@ const MediaCard = memo(function MediaCard({
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const isVideo = file.fileType === "video";
-  const url = useMemo(() => tileUrl(file, tileWidth), [file, tileWidth]);
+  // Cache-buster only added on retry (epoch > 0 + tile was errored).
+  const [retryCount, setRetryCount] = useState(0);
+  const baseUrl = useMemo(() => tileUrl(file, tileWidth), [file, tileWidth]);
+  const url = retryCount > 0 ? `${baseUrl}&retry=${retryCount}` : baseUrl;
+
+  // When parent bumps reloadEpoch, reset errored tiles so they re-fetch.
+  // Loaded tiles are unaffected — no wasteful re-download.
+  useEffect(() => {
+    if (error) {
+      setError(false);
+      setLoaded(false);
+      setRetryCount((c) => c + 1);
+    }
+  }, [reloadEpoch]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div
@@ -134,11 +153,18 @@ const MediaCard = memo(function MediaCard({
     >
       {/* Error fallback — corrupt/unsupported files show a styled badge. */}
       {error ? (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-nerv-panel border border-nerv-red/40 text-nerv-red gap-1">
-          <span className="font-mono text-[9px] font-bold tracking-wider">UNREADABLE</span>
-          <span className="text-[8px] text-nerv-muted truncate max-w-[80%]">
-            {file.fileType.toUpperCase()}
-          </span>
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-nerv-panel-2 gap-2">
+          {isVideo ? (
+            <>
+              <svg className="w-8 h-8 text-nerv-green/50" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                <rect x="3" y="5" width="18" height="14" rx="1" />
+                <path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none" />
+              </svg>
+              <span className="font-mono text-[8px] tracking-wider text-nerv-muted">NO THUMBNAIL</span>
+            </>
+          ) : (
+            <span className="font-mono text-[9px] font-bold tracking-wider text-nerv-red">UNREADABLE</span>
+          )}
         </div>
       ) : (
         <>
@@ -310,6 +336,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
   onContextMenu,
   onInspect,
   activeInspectFile,
+  reloadEpoch,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -520,6 +547,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
           onToggleFavorite={onToggleFavorite}
           onContextMenu={onContextMenu}
           onInspect={onInspect}
+          reloadEpoch={reloadEpoch}
         />
       ) : viewMode === "grid" ? (
         <GridView
@@ -535,6 +563,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
           onToggleFavorite={onToggleFavorite}
           onContextMenu={onContextMenu}
           onInspect={onInspect}
+          reloadEpoch={reloadEpoch}
         />
       ) : (
         <MasonryView
@@ -553,6 +582,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
           split={viewMode === "split"}
           activeInspectFile={activeInspectFile}
           onOpenInspect={onOpen}
+          reloadEpoch={reloadEpoch}
         />
       )}
     </div>
@@ -579,6 +609,7 @@ interface MasonryViewProps {
   split: boolean;
   activeInspectFile: MediaFile | null;
   onOpenInspect: (file: MediaFile) => void;
+  reloadEpoch: number;
 }
 
 const MasonryView = memo(function MasonryView({
@@ -597,6 +628,7 @@ const MasonryView = memo(function MasonryView({
   split,
   activeInspectFile,
   onOpenInspect,
+  reloadEpoch,
 }: MasonryViewProps) {
   const top = scrollTop - OVERSCAN;
   const bottom = scrollTop + viewportHeight + OVERSCAN;
@@ -667,6 +699,7 @@ const MasonryView = memo(function MasonryView({
               onOpen={onOpen}
               onToggleFavorite={onToggleFavorite}
               onContextMenu={onContextMenu}
+              reloadEpoch={reloadEpoch}
               onInspect={onInspect}
             />
           </div>
@@ -703,6 +736,7 @@ interface GridViewProps {
   onToggleFavorite: (file: MediaFile) => void;
   onContextMenu: (file: MediaFile, e: React.MouseEvent) => void;
   onInspect: (file: MediaFile) => void;
+  reloadEpoch: number;
 }
 
 const GridView = memo(function GridView({
@@ -717,6 +751,7 @@ const GridView = memo(function GridView({
   onOpen,
   onToggleFavorite,
   onContextMenu,
+  reloadEpoch,
   onInspect,
 }: GridViewProps) {
   const top = scrollTop - OVERSCAN;
@@ -800,6 +835,7 @@ const GridView = memo(function GridView({
                 onOpen={onOpen}
                 onToggleFavorite={onToggleFavorite}
                 onContextMenu={onContextMenu}
+                reloadEpoch={reloadEpoch}
                 onInspect={onInspect}
               />
             </div>
@@ -834,6 +870,7 @@ interface ListViewProps {
   onToggleFavorite: (file: MediaFile) => void;
   onContextMenu: (file: MediaFile, e: React.MouseEvent) => void;
   onInspect: (file: MediaFile) => void;
+  reloadEpoch: number;
 }
 
 const ListView = memo(function ListView({
@@ -849,6 +886,7 @@ const ListView = memo(function ListView({
   onToggleFavorite,
   onContextMenu,
   onInspect,
+  reloadEpoch,
 }: ListViewProps) {
   const top = scrollTop - OVERSCAN;
   const bottom = scrollTop + viewportHeight + OVERSCAN;
@@ -946,7 +984,7 @@ const ListView = memo(function ListView({
             </div>
             <div className="w-12 shrink-0">
               <img
-                src={tileUrl(file, 40)}
+                src={`${tileUrl(file, 40)}${reloadEpoch > 0 ? `&retry=${reloadEpoch}` : ""}`}
                 alt=""
                 loading="lazy"
                 className="w-10 h-10 object-cover rounded border border-nerv-border"

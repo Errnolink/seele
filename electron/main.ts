@@ -12,9 +12,13 @@ import {
 import sharp from "sharp";
 import path from "node:path";
 import fs from "node:fs";
+import { execFile } from "node:child_process";
+import { tmpdir } from "node:os";
+import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import * as mediaCache from "./mediaCache";
 import type { MediaFile, MetaPatch, ScanProgress } from "../src/scanner/types";
+import { FILE_TYPE_BY_EXT } from "../src/scanner/extensions";
 
 /* ------------------------------------------------------------------ *
  *  Window management
@@ -145,7 +149,7 @@ function messageTotal(msg: unknown): number {
   return 0;
 }
 
-/** Narrow and return the `folderPath` string from a worker start message. */
+/** Narrow and return a string field from a worker message. */
 function messageStringField(msg: unknown, field: string): string | undefined {
   if (msg && typeof msg === "object" && field in msg) {
     const v = (msg as Record<string, unknown>)[field];
@@ -189,6 +193,92 @@ function withSharpLimit<T>(fn: () => Promise<T>): Promise<T> {
 // sharp decodes off the main thread via libvips worker threads — no
 // event-loop blocking, ~5MB peak per decode vs nativeImage's full-res
 // bitmap.
+
+/** Concurrency limit for ffmpeg frame extraction. ffmpeg spawns its own
+ * threads + decodes; unbounded parallel extraction on a grid of 50
+ * videos would swamp CPU. 2 keeps first-paint latency low. */
+const ffmpegQueue: (() => void)[] = [];
+let ffmpegActive = 0;
+const FFMPEG_CONCURRENCY = 2;
+function withFfmpegLimit<T>(fn: () => Promise<T>): Promise<T> {
+  const { promise, resolve, reject } = Promise.withResolvers<T>();
+  const run = () => {
+    ffmpegActive++;
+    fn().then(resolve, reject).finally(() => {
+      ffmpegActive--;
+      const next = ffmpegQueue.shift();
+      if (next) next();
+    });
+  };
+  if (ffmpegActive < FFMPEG_CONCURRENCY) run();
+  else ffmpegQueue.push(run);
+  return promise;
+}
+/** Locate ffmpeg on the system PATH. Cached after first lookup. */
+let ffmpegPath: string | null | undefined;
+async function findFfmpeg(): Promise<string | null> {
+  if (ffmpegPath !== undefined) return ffmpegPath;
+  const { promise, resolve } = Promise.withResolvers<string | null>();
+  const proc = execFile("where", ["ffmpeg"], { timeout: 3000 }, (err, stdout) => {
+    if (err || !stdout.trim()) { ffmpegPath = null; return resolve(null); }
+    ffmpegPath = stdout.trim().split(/\r?\n/)[0];
+    resolve(ffmpegPath);
+  });
+  proc.on("error", () => { ffmpegPath = null; resolve(null); });
+  return promise;
+}
+
+/** Extract a single frame from a video at ~10% of duration (or 1s) and
+ *  resize it with sharp. Cached in the same thumbCache as image thumbnails.
+ *  Returns a JPEG Response or null if ffmpeg/sharp fails. */
+async function serveVideoThumb(
+  requested: string,
+  w: number,
+): Promise<Response | null> {
+  const cacheKey = `${requested}?w=${w}&vid=1`;
+  const cached = thumbCache.get(cacheKey);
+  if (cached) {
+    thumbCache.delete(cacheKey);
+    thumbCache.set(cacheKey, cached);
+    return new Response(cached as unknown as BodyInit, {
+      headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
+    });
+  }
+  const ff = await findFfmpeg();
+  if (!ff) return null;
+  const tmpFile = path.join(tmpdir(), `wiergise-thumb-${randomBytes(6).toString("hex")}.jpg`);
+  try {
+    // Extract frame inside the concurrency gate so a grid of 50 videos
+    // doesn't spawn 50 ffmpeg processes at once.
+    await withFfmpegLimit(async () => {
+      const { promise, resolve, reject } = Promise.withResolvers<void>();
+      const proc = execFile(
+        ff,
+        ["-ss", "1", "-i", requested, "-frames:v", "1",
+         "-vf", `scale=${w}:-2`, "-q:v", "3", "-update", "1", "-y", tmpFile],
+        { timeout: 8000, windowsHide: true },
+        (err) => { if (err) reject(err); else resolve(); },
+      );
+      proc.on("error", reject);
+      await promise;
+    });
+    const buf = await fs.promises.readFile(tmpFile);
+    const bytes = new Uint8Array(buf);
+    thumbCache.set(cacheKey, bytes);
+    if (thumbCache.size > THUMB_CACHE_MAX) {
+      const oldest = thumbCache.keys().next().value;
+      if (oldest !== undefined) thumbCache.delete(oldest);
+    }
+    return new Response(bytes as unknown as BodyInit, {
+      headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
+    });
+  } catch (e) {
+    if (!app.isPackaged) console.debug("[media] video thumb failed:", e);
+    return null;
+  } finally {
+    fs.promises.unlink(tmpFile).catch(() => {});
+  }
+}
 
 
 /** Downscale `requested` to width `w` and return a JPEG Response, or null
@@ -275,10 +365,13 @@ app.whenReady().then(() => {
     const targetWidth = url.searchParams.get("w");
     if (targetWidth) {
       const w = parseInt(targetWidth, 10);
-      // Grid thumbnails (≤512) and viewer preview tier (≤2560) are both
-      // served downscaled; anything else falls through to the raw file.
       if (Number.isFinite(w) && w > 0 && w <= 2560) {
-        const resized = await serveResized(requested, w);
+        // Route videos to ffmpeg frame extraction, images to sharp resize.
+        const ext = path.extname(requested).toLowerCase();
+        const isVideo = FILE_TYPE_BY_EXT[ext] === "video";
+        const resized = isVideo
+          ? await serveVideoThumb(requested, w)
+          : await serveResized(requested, w);
         if (resized) return resized;
       }
     }

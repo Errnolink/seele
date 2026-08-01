@@ -95,24 +95,20 @@ const FilmstripThumb: React.FC<FilmstripThumbProps> = memo(
         ].join(" ")}
         title={file.fileName}
       >
-        {isVideo ? (
-          <div className="flex h-full w-full items-center justify-center bg-nerv-panel-2">
-            <svg
-              className="h-5 w-5 text-nerv-green"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-            >
+        <img
+          src={thumbUrl}
+          alt={file.fileName}
+          className="h-full w-full object-cover"
+          loading="lazy"
+          draggable={false}
+          onError={(e) => { e.currentTarget.style.opacity = "0"; }}
+        />
+        {isVideo && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none">
+            <svg className="h-4 w-4 text-nerv-green drop-shadow" viewBox="0 0 24 24" fill="currentColor">
               <path d="M8 5v14l11-7z" />
             </svg>
           </div>
-        ) : (
-          <img
-            src={thumbUrl}
-            alt={file.fileName}
-            className="h-full w-full object-cover"
-            loading="lazy"
-            draggable={false}
-          />
         )}
         {active && (
           <div className="absolute inset-x-0 bottom-0 h-0.5 bg-nerv-orange" />
@@ -382,11 +378,10 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
       (dir: "prev" | "next") => onNavigate?.(dir),
       [onNavigate],
     );
-    // Two-tier loading: when fit-to-screen (zoom===1) request a 2560px
-    // preview — a 9000px source decodes as a 2560px bitmap (~15MB) not
-    // the full ~250MB. Only when the user zooms in do we load the raw
-    // file so the transform reveals real detail.
-    const VIEWER_PREVIEW_W = 2560;
+    // Two-tier loading: preview at 1920px for instant display, then raw
+    // only when zoomed past 1×. 1920px decodes fast (~8MB JPEG vs 250MB
+    // raw for an 9000px source) and looks crisp at fit-to-screen.
+    const VIEWER_PREVIEW_W = 1920;
     const previewUrl = React.useMemo(() => {
       const base = toMediaUrl(file.filePath);
       return isVideo ? base : `${base}?w=${VIEWER_PREVIEW_W}`;
@@ -409,7 +404,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
           const f = files[i];
           if (f.fileType !== "video") {
             const img = new Image();
-            img.src = `${toMediaUrl(f.filePath)}?w=2560`;
+            img.src = `${toMediaUrl(f.filePath)}?w=${VIEWER_PREVIEW_W}`;
           }
         }
       }
@@ -539,9 +534,10 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                 ref={videoRef}
                 key={file.filePath}
                 src={previewUrl}
+                poster={`${toMediaUrl(file.filePath)}?w=1280`}
                 controls
                 tabIndex={0}
-                preload="auto"
+                preload="metadata"
                 className="max-h-[78vh] max-w-[82vw] outline-none"
                 style={{ border: "1px solid rgba(255,85,0,0.2)" }}
               />
