@@ -995,6 +995,73 @@ export default function App() {
           )}
         </main>
       </div>
+      {/* Footer status telemetry bar (v2.5 §1b) */}
+      {scan.status !== "idle" && (
+        <footer className="flex items-center gap-3 px-4 h-7 border-t border-nerv-border/60 bg-nerv-panel/40 text-[10px] font-mono flex-shrink-0 z-20">
+          <span className="text-nerv-text-dim tracking-wider">STATUS</span>
+          <span
+            className={`font-bold tracking-wider ${
+              scan.status === "done"
+                ? "text-nerv-green"
+                : scan.status === "scanning"
+                  ? "text-nerv-orange"
+                  : scan.status === "error"
+                    ? "text-nerv-red"
+                    : "text-nerv-text-dim"
+            }`}
+          >
+            {scan.status === "done"
+              ? "\u25CF NOMINAL"
+              : scan.status === "scanning"
+                ? "\u25CF ACTIVE"
+                : scan.status === "error"
+                  ? "\u25CF FAULT"
+                  : "\u25CF IDLE"}
+          </span>
+          {stats.totalFiles > 0 && (
+            <>
+              <span className="text-nerv-border-highlight">{"\u2502"}</span>
+              {/* Segmented ratio bar */}
+              <div className="eva-segbar flex h-3 w-32">
+                {(() => {
+                  const total = stats.totalFiles;
+                  const imgPct = (stats.imageCount / total) * 100;
+                  const vidPct = (stats.videoCount / total) * 100;
+                  return (
+                    <>
+                      <div
+                        className="bg-nerv-cyan"
+                        style={{ width: `${imgPct}%` }}
+                        title={`IMG: ${stats.imageCount.toLocaleString()} (${imgPct.toFixed(1)}%)`}
+                      />
+                      <div
+                        className="bg-nerv-green"
+                        style={{ width: `${vidPct}%` }}
+                        title={`VID: ${stats.videoCount.toLocaleString()} (${vidPct.toFixed(1)}%)`}
+                      />
+                    </>
+                  );
+                })()}
+              </div>
+              <span className="text-nerv-cyan tabular-nums">
+                IMG {stats.imageCount.toLocaleString()}
+              </span>
+              <span className="text-nerv-green tabular-nums">
+                VID {stats.videoCount.toLocaleString()}
+              </span>
+              <span className="text-nerv-border-highlight">{"\u2502"}</span>
+              <span className="text-nerv-text-dim tabular-nums">
+                {formatBytes(stats.totalSizeBytes)}
+              </span>
+            </>
+          )}
+          {selectedIds.size > 0 && (
+            <span className="ml-auto text-nerv-orange tabular-nums font-bold">
+              {selectedIds.size} SELECTED
+            </span>
+          )}
+        </footer>
+      )}
 
       {contextMenu && (
         <ContextMenu

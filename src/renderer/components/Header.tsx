@@ -220,10 +220,10 @@ export function Header(props: HeaderProps) {
             </div>
             <div className="flex flex-col leading-none">
               <div className="flex items-center gap-1.5">
-                <span className="text-[13px] font-bold tracking-[0.25em] phosphor-lime">
+                <span className="eva-title text-[15px] phosphor-lime">
                   WIERGISE
                 </span>
-                <span className="eva-ticket bg-[rgba(124,58,237,0.25)] text-[#c4b5fd] text-[9px] font-bold tracking-[0.15em] px-1.5 py-0.5">
+                <span className="eva-cut bg-[rgba(124,58,237,0.25)] text-[#c4b5fd] text-[9px] font-bold tracking-[0.15em] px-1.5 py-0.5">
                   v2.5
                 </span>
               </div>
