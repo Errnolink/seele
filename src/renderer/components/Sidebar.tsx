@@ -39,10 +39,10 @@ interface QuickView {
 }
 
 const QUICK_VIEWS: QuickView[] = [
-  { key: "all", label: "ALL FILES", fill: "eva-fill-amber", clearFolder: true },
-  { key: "image", label: "IMAGES", fill: "eva-fill-cyan" },
-  { key: "video", label: "VIDEOS", fill: "eva-fill-green" },
-  { key: "favorite", label: "STARRED", fill: "eva-fill-amber" },
+  { key: "all", label: "ALL MEDIA ASSETS", fill: "eva-fill-amber", clearFolder: true },
+  { key: "image", label: "STILL IMAGES", fill: "eva-fill-cyan" },
+  { key: "video", label: "VIDEO TAKES", fill: "eva-fill-green" },
+  { key: "favorite", label: "PRIORITY STARRED", fill: "eva-fill-amber" },
 ];
 
 /* --------------------------- SectionLabel helper -------------------------- */
@@ -102,7 +102,7 @@ const QuickViews = memo(function QuickViews({
 
   return (
     <div className="p-3 border-b border-nerv-purple/25 flex flex-col gap-2.5">
-      <SectionLabel pulse>QUICK VIEWS</SectionLabel>
+      <SectionLabel pulse>MEDIA CLASSIFICATION</SectionLabel>
       <div className="flex flex-col gap-1.5">
         {QUICK_VIEWS.map((qv) => {
           const active = typeFilter === qv.key;
@@ -124,10 +124,10 @@ const QuickViews = memo(function QuickViews({
               <span
                 className={`w-2 h-2 shrink-0 ${
                   qv.key === "image"
-                    ? "bg-nerv-cyan shadow-[0_0_6px_#22d3ee]"
+                    ? "bg-nerv-cyan shadow-[0_0_6px_#20f0ff]"
                     : qv.key === "video"
-                    ? "bg-nerv-green shadow-[0_0_6px_#4ade80]"
-                    : "bg-nerv-amber shadow-[0_0_6px_#fbbf24]"
+                    ? "bg-nerv-green shadow-[0_0_6px_#50ff50]"
+                    : "bg-nerv-amber shadow-[0_0_6px_#ffb700]"
                 }`}
               />
               <span className="flex-1 text-left">{qv.label}</span>
@@ -450,11 +450,11 @@ const StorageTelemetry = memo(function StorageTelemetry({
       {/* chunky segmented ratio bar */}
       <div className="eva-segbar relative h-3 flex">
         <div
-          className="h-full bg-nerv-cyan shadow-[0_0_8px_#22d3ee]"
+          className="h-full bg-nerv-cyan shadow-[0_0_8px_#20f0ff]"
           style={{ width: `${imgPct}%` }}
         />
         <div
-          className="h-full bg-nerv-green shadow-[0_0_8px_#4ade80]"
+          className="h-full bg-nerv-green shadow-[0_0_8px_#50ff50]"
           style={{ width: `${vidPct}%` }}
         />
         {/* dark tick marks overdrawn */}
@@ -468,12 +468,12 @@ const StorageTelemetry = memo(function StorageTelemetry({
       {/* legend */}
       <div className="flex items-center gap-4 text-[10px] font-mono">
         <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 bg-nerv-cyan shadow-[0_0_6px_#22d3ee]" />
+          <span className="w-2 h-2 bg-nerv-cyan shadow-[0_0_6px_#20f0ff]" />
           <span className="phosphor-cyan">IMG</span>
           <span className="phosphor-cyan tabular-nums">{pad(img, 3)}</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 bg-nerv-green shadow-[0_0_6px_#4ade80]" />
+          <span className="w-2 h-2 bg-nerv-green shadow-[0_0_6px_#50ff50]" />
           <span className="phosphor-green">VID</span>
           <span className="phosphor-green tabular-nums">{pad(vid, 3)}</span>
         </div>

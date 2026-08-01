@@ -101,11 +101,11 @@ export default function AnalyticsModal({ files, onClose, onOpenMedia }: Analytic
         <div className="flex flex-col gap-2">
           <div className="eva-segbar relative h-3 flex">
             <div
-              className="h-full bg-nerv-cyan shadow-[0_0_8px_#22d3ee]"
+              className="h-full bg-nerv-cyan shadow-[0_0_8px_#20f0ff]"
               style={{ width: `${stats.imagePct}%` }}
             />
             <div
-              className="h-full bg-nerv-green shadow-[0_0_8px_#4ade80]"
+              className="h-full bg-nerv-green shadow-[0_0_8px_#50ff50]"
               style={{ width: `${stats.videoPct}%` }}
             />
             {/* dark tick marks */}
@@ -117,12 +117,12 @@ export default function AnalyticsModal({ files, onClose, onOpenMedia }: Analytic
           </div>
           <div className="flex items-center gap-4 text-[10px] font-mono">
             <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 bg-nerv-cyan shadow-[0_0_6px_#22d3ee]" />
+              <span className="w-2 h-2 bg-nerv-cyan shadow-[0_0_6px_#20f0ff]" />
               <span className="phosphor-cyan">IMG</span>
               <span className="phosphor-cyan tabular-nums">{stats.imagePct.toFixed(0)}%</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 bg-nerv-green shadow-[0_0_6px_#4ade80]" />
+              <span className="w-2 h-2 bg-nerv-green shadow-[0_0_6px_#50ff50]" />
               <span className="phosphor-green">VID</span>
               <span className="phosphor-green tabular-nums">{stats.videoPct.toFixed(0)}%</span>
             </div>

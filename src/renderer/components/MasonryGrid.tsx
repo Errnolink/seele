@@ -219,7 +219,7 @@ const MediaCard = memo(function MediaCard({
             onToggleFavorite(file);
           }}
           className={[
-            "pointer-events-auto w-6 h-6 rounded-full flex items-center justify-center text-[13px] leading-none transition-colors",
+            "pointer-events-auto w-6 h-6 flex items-center justify-center text-[13px] leading-none transition-colors",
             favorite
               ? "bg-nerv-amber/90 text-nerv-bg"
               : "bg-black/40 text-white/80 hover:text-nerv-amber",
@@ -229,14 +229,14 @@ const MediaCard = memo(function MediaCard({
         </button>
       </div>
 
-      {/* Type badge (bottom-right). */}
+      {/* Type badge (bottom-right) — EVA tag-chip geometry. */}
       <div className="absolute bottom-1.5 right-1.5 pointer-events-none">
         {isVideo ? (
-          <span className="px-1.5 py-0.5 rounded bg-nerv-green/20 border border-nerv-green/50 text-nerv-green text-[9px] font-mono font-bold tracking-wider">
+          <span className="tag-chip px-1.5 py-0.5 bg-nerv-green/20 border border-nerv-green/50 text-nerv-green text-[9px] font-mono font-bold tracking-wider">
             VID
           </span>
         ) : (
-          <span className="px-1.5 py-0.5 rounded bg-nerv-cyan/20 border border-nerv-cyan/50 text-nerv-cyan text-[9px] font-mono font-bold tracking-wider">
+          <span className="tag-chip px-1.5 py-0.5 bg-nerv-cyan/20 border border-nerv-cyan/50 text-nerv-cyan text-[9px] font-mono font-bold tracking-wider">
             IMG
           </span>
         )}
@@ -245,7 +245,7 @@ const MediaCard = memo(function MediaCard({
       {/* Center play circle for videos. */}
       {isVideo && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="w-9 h-9 rounded-full bg-nerv-green/30 border border-nerv-green/70 flex items-center justify-center backdrop-blur-sm">
+          <div className="w-9 h-9 bg-nerv-green/30 border border-nerv-green/70 flex items-center justify-center backdrop-blur-sm">
             <svg
               className="w-4 h-4 text-nerv-green"
               viewBox="0 0 24 24"
@@ -992,7 +992,7 @@ const ListView = memo(function ListView({
                 src={`${tileUrl(file, 40)}${reloadEpoch > 0 ? `&retry=${reloadEpoch}` : ""}`}
                 alt=""
                 loading="lazy"
-                className="w-10 h-10 object-cover rounded border border-nerv-border"
+                className="w-10 h-10 object-cover border border-nerv-border"
                 draggable={false}
               />
             </div>
@@ -1001,11 +1001,11 @@ const ListView = memo(function ListView({
             </span>
             <span className="w-12 shrink-0 text-center">
               {isVideo ? (
-                <span className="px-1 py-0.5 bg-nerv-green/20 border border-nerv-green/50 text-nerv-green text-[9px] font-bold">
+                <span className="tag-chip px-1 py-0.5 bg-nerv-green/20 border border-nerv-green/50 text-nerv-green text-[9px] font-bold">
                   VID
                 </span>
               ) : (
-                <span className="px-1 py-0.5 bg-nerv-cyan/20 border border-nerv-cyan/50 text-nerv-cyan text-[9px] font-bold">
+                <span className="tag-chip px-1 py-0.5 bg-nerv-cyan/20 border border-nerv-cyan/50 text-nerv-cyan text-[9px] font-bold">
                   IMG
                 </span>
               )}
