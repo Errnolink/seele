@@ -63,8 +63,8 @@ textarea,
  *  Each is a single ~30% 4px shadow — intentionally subdued (v2.6).
  * ========================================================================= */
 .phosphor-orange {
-  color: #ff8f4d;
-  text-shadow: 0 0 4px rgba(255, 137, 77, 0.3);
+  color: #ff9830;
+  text-shadow: 0 0 4px rgba(255, 152, 48, 0.3);
 }
 .phosphor-amber {
   color: #ffdf80;
@@ -79,15 +79,51 @@ textarea,
   text-shadow: 0 0 4px rgba(124, 58, 237, 0.3);
 }
 .phosphor-cyan {
-  color: #67e8f9;
-  text-shadow: 0 0 4px rgba(0, 240, 255, 0.3);
+  color: #20f0ff;
+  text-shadow: 0 0 4px rgba(32, 240, 255, 0.3);
 }
 .phosphor-green {
-  color: #6ee7b7;
-  text-shadow: 0 0 4px rgba(16, 185, 129, 0.3);
+  color: #50ff50;
+  text-shadow: 0 0 4px rgba(80, 255, 80, 0.3);
 }
 .phosphor-dim {
   color: #8a7a68;
+}
+
+/* =========================================================================
+ *  EVA signature title compression (§2.2)
+ * ========================================================================= */
+.eva-title {
+  font-family: var(--font-display);
+  font-weight: 900;
+  text-transform: uppercase;
+  transform: scaleX(0.82); /* Signature mechanical horizontal compression */
+  transform-origin: left center;
+  letter-spacing: 0.14em;
+}
+
+/* =========================================================================
+ *  Brutalist geometry rule (§2.4) — no rounded corners anywhere
+ * ========================================================================= */
+* {
+  border-radius: 0 !important;
+}
+
+/* =========================================================================
+ *  CRT scanline overlay (§2.4) — subtle repeating gradient
+ * ========================================================================= */
+.crt-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.12) 2px,
+    rgba(0, 0, 0, 0.12) 3px
+  );
 }
 
 /* =========================================================================
@@ -106,6 +142,46 @@ textarea,
     100% 100%,
     9px 100%,
     0 calc(100% - 9px)
+  );
+}
+/* ---- v2.5 spec geometry (§2.3) ---- */
+
+/* Full Ticket: top-right + bottom-left chamfer (6px). */
+.eva-cut {
+  clip-path: polygon(
+    6px 0, 100% 0, 100% calc(100% - 6px),
+    calc(100% - 6px) 100%, 0 100%, 0 6px
+  );
+}
+
+/* Single Top-Right Chamfer (labels, tabs, inputs). */
+.eva-cut-tr {
+  clip-path: polygon(
+    0 0, calc(100% - 6px) 0, 100% 6px,
+    100% 100%, 0 100%
+  );
+}
+
+/* Single Bottom-Left Chamfer (chips, sort buttons). */
+.eva-cut-bl {
+  clip-path: polygon(
+    0 0, 100% 0, 100% 100%,
+    6px 100%, 0 calc(100% - 6px)
+  );
+}
+
+/* Diagonal Parallelogram (action buttons, view tabs). */
+.eva-shear {
+  clip-path: polygon(
+    5px 0, 100% 0, calc(100% - 5px) 100%, 0 100%
+  );
+}
+
+/* Angled Tag Chip. */
+.tag-chip {
+  clip-path: polygon(
+    5px 0, 100% 0, 100% calc(100% - 5px),
+    calc(100% - 5px) 100%, 0 100%, 0 5px
   );
 }
 
@@ -175,30 +251,30 @@ textarea,
   filter: brightness(1.15);
 }
 
-/* Bordered readout panel: 1px amber skin wrapping a dark ticket inner. */
+/* Bordered readout panel: 1px orange skin wrapping a dark ticket inner. */
 .eva-frame {
-  background: rgba(198, 120, 22, 0.55);
+  background: rgba(255, 152, 48, 0.45);
   padding: 1px;
-  box-shadow: 0 0 8px rgba(198, 120, 22, 0.18);
+  box-shadow: 0 0 8px rgba(255, 152, 48, 0.18);
 }
 .eva-inner {
-  background: #0e0c07;
-  color: #ffb020;
-  text-shadow: 0 0 5px rgba(255, 176, 32, 0.5);
+  background: #0a0a0c;
+  color: #ff9830;
+  text-shadow: 0 0 5px rgba(255, 152, 48, 0.5);
 }
 
 /* Small square button: dark square, 1px amber border, orange glyph. */
 .eva-sqbtn {
-  background: #12100b;
-  border: 1px solid rgba(198, 120, 22, 0.6);
-  color: #ff5500;
+  background: #121214;
+  border: 1px solid var(--color-nerv-orange-dim);
+  color: var(--color-nerv-orange);
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 .eva-sqbtn:hover {
-  border-color: #ff5500;
-  color: #ff7733;
+  border-color: var(--color-nerv-orange);
+  color: var(--color-nerv-orange-hot);
   filter: brightness(1.2);
 }
 
@@ -218,8 +294,8 @@ textarea,
 
 /* Segmented ratio bar skin (storage telemetry footer). */
 .eva-segbar {
-  background: #06050a;
-  border: 1px solid rgba(198, 120, 22, 0.3);
+  background: #050505;
+  border: 1px solid var(--color-nerv-orange-dim);
   overflow: hidden;
 }
 
@@ -228,7 +304,7 @@ textarea,
   -webkit-appearance: none;
   appearance: none;
   height: 4px;
-  background: rgba(255, 183, 0, 0.2);
+  background: rgba(255, 152, 48, 0.2);
   border-radius: 2px;
   outline: none;
   cursor: pointer;
@@ -238,25 +314,23 @@ textarea,
   appearance: none;
   width: 12px;
   height: 12px;
-  background: #ffb700;
-  border-radius: 50%;
-  box-shadow: 0 0 6px rgba(255, 183, 0, 0.6);
+  background: var(--color-nerv-orange);
+  box-shadow: 0 0 6px rgba(255, 152, 48, 0.6);
 }
 .eva-slider::-moz-range-thumb {
   width: 12px;
   height: 12px;
-  background: #ffb700;
+  background: var(--color-nerv-orange);
   border: none;
-  border-radius: 50%;
-  box-shadow: 0 0 6px rgba(255, 183, 0, 0.6);
+  box-shadow: 0 0 6px rgba(255, 152, 48, 0.6);
 }
 
-/* Top bar surface — 9% violet sheen over app background (§7.1). */
+/* Top bar surface — subtle violet sheen over true black (v2.5 §2.1). */
 .eva-top-bar {
   background: linear-gradient(
     180deg,
     rgba(124, 58, 237, 0.09) 0%,
-    #07080c 100%
+    #000000 100%
   );
 }
 

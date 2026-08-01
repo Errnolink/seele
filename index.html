@@ -3,10 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: media:; media-src 'self' media:; font-src 'self' data:; connect-src 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: media:; media-src 'self' media:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self'" />
     <meta name="description" content="Wiergise Media Scanner — browse and scan local media files" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='28' font-size='28'%3E📡%3C/text%3E%3C/svg%3E" />
-    <title>Media Scanner</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Display:wght@400;700;900&family=Shippori+Mincho+B1:wght@400;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
   </head>
   <body>
     <div id="root"></div>

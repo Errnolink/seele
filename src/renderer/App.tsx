@@ -774,6 +774,8 @@ export default function App() {
           onDone={() => setBooted(true)}
         />
       )}
+      {/* CRT scanline overlay (v2.5 §2.4) */}
+      <div className="crt-overlay" aria-hidden="true" />
 
       <TitleBar folder={folder} />
 

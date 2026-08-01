@@ -13,28 +13,38 @@
  * ========================================================================= */
 
 @theme {
-  /* ---- palette (§2.1) ---- */
-  --color-nerv-bg: #07080c; /* app background (near-black, blue tint) */
-  --color-nerv-panel: #0d0f17; /* panel/container background */
-  --color-nerv-panel-2: #141724; /* raised surface (inputs, buttons, hover rows) */
-  --color-nerv-border: #1e2235; /* default hairline border */
-  --color-nerv-border-highlight: #2f3650; /* border hover / promoted */
-  --color-nerv-orange: #ff5500; /* primary ring accent (card selection, focus) */
-  --color-nerv-orange-glow: rgba(255, 85, 0, 0.25); /* glow shadow */
-  --color-nerv-amber: #ffb700; /* gold accent (star, >50MB, default active, Scan) */
-  --color-nerv-cyan: #00f0ff; /* images */
-  --color-nerv-green: #10b981; /* videos / success */
-  --color-nerv-red: #ef4444; /* errors, destructive */
-  --color-nerv-purple: #7c3aed; /* EVA chrome (header, sidebar frame, GROUP) */
-  --color-nerv-lime: #a3e635; /* EVA phosphor text (brand, search, labels, VIEW) */
-  --color-nerv-text: #f1f5f9; /* primary text */
-  --color-nerv-muted: #64748b; /* secondary text, icons, labels */
+  /* ---- palette (v2.5 NERV-accurate, §2.1) ---- */
+  /* Void & Panels */
+  --color-nerv-bg: #000000;          /* True NERV black background */
+  --color-nerv-panel: #0a0a0c;       /* Secondary dark panel */
+  --color-nerv-panel-2: #121214;     /* Raised surface / input background */
+  --color-nerv-border: #1f1f23;      /* Hairline borders */
+  --color-nerv-border-highlight: #2e2e34; /* Active / hover border */
 
-  /* ---- typography ---- */
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, Menlo,
-    monospace;
-  --font-display: "Orbitron", "JetBrains Mono", system-ui, sans-serif;
+  /* Functional NERV Palette — one role per hue */
+  --color-nerv-orange: #ff9830;      /* Primary labels, active highlights, command accents */
+  --color-nerv-orange-glow: rgba(255, 152, 48, 0.25); /* glow shadow */
+  --color-nerv-orange-hot: #ffcc50;  /* Bright orange highlight */
+  --color-nerv-orange-dim: #c87020;  /* Muted orange border/text */
+  --color-nerv-green: #50ff50;       /* Nominal data, success, video badge */
+  --color-nerv-green-dim: #30bb30;   /* Muted green */
+  --color-nerv-cyan: #20f0ff;        /* Resolution, image badge */
+  --color-nerv-cyan-dim: #10a0b0;    /* Muted cyan */
+  --color-nerv-red: #ff3030;         /* Emergency / purge / destructive */
+  --color-nerv-amber: #ffb700;       /* Priority starred, warning badges */
+  --color-nerv-purple: #7c3aed;      /* EVA chrome (header, sidebar frame) */
+  --color-nerv-magenta: #ff4fd8;     /* RAW sensor frames badge */
+  --color-nerv-lime: #a3e635;        /* EVA phosphor text */
+  --color-nerv-text: #e8e8e4;        /* Primary readable text */
+  --color-nerv-text-dim: #8a8a85;    /* Secondary text */
+  --color-nerv-muted: #6a6a65;       /* Low-contrast labels (lightened from spec #565650 for AA readability) */
 
+  /* ---- typography (§2.2) ---- */
+  --font-display: "Noto Serif Display", serif; /* Heavy serif for EVA title cards */
+  --font-mono: "JetBrains Mono", ui-monospace, monospace; /* Data readouts & UI text */
+  --font-jp: "Shippori Mincho B1", serif; /* Institutional Japanese subtitles */
+
+  /* ---- animations ---- */
   --animate-pulse-soft: pulse-soft 2.5s ease-in-out infinite;
   --animate-glow-orange: glow-orange 2.5s ease-in-out infinite;
   --animate-scanline: scanline 4s linear infinite;
