@@ -72,6 +72,17 @@ function tileUrl(file: MediaFile, tileWidth: number): string {
   return `${base}?w=${w}`;
 }
 
+/** Derive a stable EVA-style plate ID (e.g. "EVA-00042") from a file path.
+ *  Uses a simple deterministic hash so the same file always gets the same
+ *  plate number without needing its array index. */
+function plateId(filePath: string): string {
+  let hash = 0;
+  for (let i = 0; i < filePath.length; i++) {
+    hash = ((hash << 5) - hash + filePath.charCodeAt(i)) | 0;
+  }
+  return `EVA-${String(Math.abs(hash) % 100000).padStart(5, "0")}`;
+}
+
 // ── MediaCard (memoized grid/masonry tile) ──────────────────────────
 
 interface MediaCardProps {
@@ -147,7 +158,7 @@ const MediaCard = memo(function MediaCard({
         e.dataTransfer.setData("text/plain", file.filePath);
       }}
       className={[
-        "group relative rounded border overflow-hidden transition-all duration-200 cursor-pointer bg-nerv-panel select-none",
+        "group relative border overflow-hidden transition-all duration-200 cursor-pointer bg-nerv-panel select-none",
         mayHaveAlpha && "thumb-checkerboard",
         selected
           ? "border-nerv-orange ring-2 ring-nerv-orange/50 shadow-[0_0_15px_rgba(255,152,48,0.3)]"
@@ -227,6 +238,20 @@ const MediaCard = memo(function MediaCard({
         >
           {"\u2605"}
         </button>
+      </div>
+      {/* Hover reticle brackets — targeting reticle aesthetic (v2.5 §5). */}
+      <div className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+        <span className="absolute top-0.5 left-0.5 w-2.5 h-2.5 border-t border-l border-nerv-orange/70" />
+        <span className="absolute top-0.5 right-0.5 w-2.5 h-2.5 border-t border-r border-nerv-orange/70" />
+        <span className="absolute bottom-0.5 left-0.5 w-2.5 h-2.5 border-b border-l border-nerv-orange/70" />
+        <span className="absolute bottom-0.5 right-0.5 w-2.5 h-2.5 border-b border-r border-nerv-orange/70" />
+      </div>
+
+      {/* Plate ID (bottom-left, revealed on hover) — v2.5 §5. */}
+      <div className="absolute bottom-1.5 left-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none">
+        <span className="bg-black/60 text-nerv-orange text-[8px] font-mono font-bold tracking-wider px-1 py-0.5 border border-nerv-orange/30">
+          {plateId(file.filePath)}
+        </span>
       </div>
 
       {/* Type badge (bottom-right) — EVA tag-chip geometry. */}
@@ -929,6 +954,7 @@ const ListView = memo(function ListView({
       >
         <span className="w-8" />
         <span className="w-12">PREV</span>
+        <span className="w-16">PLATE</span>
         <span className="flex-1">FILE NAME</span>
         <span className="w-12">TYPE</span>
         <span className="w-24">DIMENSIONS</span>
@@ -996,6 +1022,9 @@ const ListView = memo(function ListView({
                 draggable={false}
               />
             </div>
+            <span className="w-16 shrink-0 text-nerv-orange/80 text-[9px] font-mono tracking-wider">
+              {plateId(file.filePath)}
+            </span>
             <span className="flex-1 min-w-0 text-nerv-text truncate text-xs font-mono">
               {file.fileName}
             </span>
