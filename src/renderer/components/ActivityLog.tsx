@@ -101,7 +101,7 @@ export const ActivityLog: React.FC<ActivityLogProps> = memo(({ entries, onClear 
         onClick={() => setOpen((v) => !v)}
         className="self-end flex items-center gap-2 px-3 py-1.5 bg-nerv-panel border border-nerv-border rounded hover:border-nerv-amber/50 transition-colors group"
       >
-        <span className="w-1.5 h-1.5 rounded-full bg-nerv-lime shadow-[0_0_6px_#a3e635]" />
+        <span className="w-1.5 h-1.5 rounded-full bg-nerv-lime shadow-[0_0_6px_#c9e98a]" />
         <span className="font-mono text-[9px] tracking-wider uppercase text-nerv-muted group-hover:text-nerv-text">
           {open ? "HIDE" : `${entries.length} OP${entries.length !== 1 ? "S" : ""}`}
         </span>

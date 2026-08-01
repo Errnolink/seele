@@ -399,7 +399,7 @@ export function Header(props: HeaderProps) {
 
             {/* Live clock */}
             <div className="flex items-center gap-1.5 pl-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-nerv-lime shadow-[0_0_8px_#a3e635] animate-pulse-soft" />
+              <span className="w-1.5 h-1.5 rounded-full bg-nerv-lime shadow-[0_0_8px_#c9e98a] animate-pulse-soft" />
               <span className="phosphor-lime text-[12px] font-bold tabular-nums tracking-[0.1em]">
                 {formatClock(now)}
               </span>

@@ -17,7 +17,7 @@ export const TitleBar: React.FC<TitleBarProps> = memo(({ folder }) => {
     >
       {/* Left: drag handle — folder path shown as status */}
       <div className="flex items-center gap-2 pl-3">
-        <span className="w-1.5 h-1.5 rounded-full bg-nerv-lime shadow-[0_0_6px_#a3e635]" />
+        <span className="w-1.5 h-1.5 rounded-full bg-nerv-lime shadow-[0_0_6px_#c9e98a]" />
         <span className="font-mono text-[9px] tracking-wider text-nerv-muted truncate max-w-[500px]">
           {folder ?? "AWAITING DIRECTORY INPUT"}
         </span>

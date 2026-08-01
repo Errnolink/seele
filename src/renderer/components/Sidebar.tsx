@@ -57,7 +57,7 @@ function SectionLabel({
   return (
     <div className="flex items-center gap-2 select-none">
       <span
-        className={`w-1 h-3 bg-nerv-lime shadow-[0_0_6px_#a3e635] ${
+        className={`w-1 h-3 bg-nerv-lime shadow-[0_0_6px_#c9e98a] ${
           pulse ? "animate-pulse-soft" : ""
         }`}
       />
@@ -216,7 +216,7 @@ const FolderTreeNode = memo(function FolderTreeNode({
       >
         {/* 2px lime selection marker */}
         {selected && (
-          <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[2px] h-4 bg-nerv-lime shadow-[0_0_8px_#a3e635]" />
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[2px] h-4 bg-nerv-lime shadow-[0_0_8px_#c9e98a]" />
         )}
 
         {/* chevron — toggles expansion only */}
@@ -481,7 +481,7 @@ const StorageTelemetry = memo(function StorageTelemetry({
 
       {/* status line */}
       <div className="flex items-center gap-1.5 text-[10px] font-mono">
-        <span className="w-1.5 h-1.5 rounded-full bg-nerv-lime shadow-[0_0_8px_#a3e635] animate-pulse-soft" />
+        <span className="w-1.5 h-1.5 rounded-full bg-nerv-lime shadow-[0_0_8px_#c9e98a] animate-pulse-soft" />
         <span className="phosphor-dim tracking-[0.2em]">MAGI.LINK NOMINAL</span>
       </div>
     </div>
