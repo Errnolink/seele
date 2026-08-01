@@ -14,7 +14,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import * as mediaCache from "./mediaCache";
 import type { MediaFile, MetaPatch, ScanProgress } from "../src/scanner/types";
@@ -158,12 +158,85 @@ function messageStringField(msg: unknown, field: string): string | undefined {
   return undefined;
 }
 
-/** PERF: LRU cache for downscaled images so scrolling back doesn't
- * re-decode the source. Keyed on `${path}?w=${w}`.
- * 150 entries caps memory at ~30MB (thumbnail tier) / ~60MB (viewer tier)
- * — the previous 500 entries could hold ~200MB of JPEG buffers alone. */
+/** Two-tier thumbnail cache: in-memory LRU (hot) + on-disk JPEGs (cold).
+ *  The disk tier lives under app.getPath("cache") so the OS manages
+ *  cleanup (Windows Storage Sense / Disk Cleanup clears it automatically —
+  *  the user never has to hunt it down). Surviving across restarts means
+  *  ffmpeg/sharp never re-extract a thumbnail that's already on disk.
+ *  Keyed on a content-derived hash of the cache key string. */
 const thumbCache = new Map<string, Uint8Array>();
 const THUMB_CACHE_MAX = 150;
+
+/** Resolve the on-disk cache directory. Lazily created on first use.
+ *  On Windows this targets %LOCALAPPDATA%/<app>/Cache — the exact folder
+ *  Windows Storage Sense / Disk Cleanup reclaims automatically, so the
+ *  user never has to hunt it down. On macOS/Linux, userData/thumbs. */
+let thumbDir = "";
+function getThumbDir(): string {
+  if (!thumbDir) {
+    let base: string;
+    if (process.platform === "win32" && process.env.LOCALAPPDATA) {
+      base = path.join(process.env.LOCALAPPDATA, "wiergise-media-scanner", "Cache");
+    } else {
+      base = path.join(app.getPath("userData"), "thumbs");
+    }
+    try {
+      thumbDir = path.join(base, "thumbs");
+      fs.mkdirSync(thumbDir, { recursive: true });
+    } catch {
+      thumbDir = path.join(tmpdir(), "wiergise-thumbs");
+      fs.mkdirSync(thumbDir, { recursive: true });
+    }
+  }
+  return thumbDir;
+}
+
+/** Map a cache key to a stable, filesystem-safe filename. SHA-1 keeps it
+ *  short and collision-free; the leading prefix sharding prevents any
+ *  single directory from holding 50k flat entries (faster fs ops). */
+function thumbDiskPath(cacheKey: string): string {
+  const hash = createHash("sha1").update(cacheKey).digest("hex");
+  return path.join(getThumbDir(), hash.slice(0, 2), `${hash}.jpg`);
+}
+
+/** Store a thumbnail in both tiers (RAM LRU + disk) and run eviction.
+ *  The disk write is best-effort — a failure just means the next request
+ *  re-extracts; it never blocks serving the response. */
+function storeThumb(cacheKey: string, bytes: Uint8Array): void {
+  thumbCache.set(cacheKey, bytes);
+  if (thumbCache.size > THUMB_CACHE_MAX) {
+    const oldest = thumbCache.keys().next().value;
+    if (oldest !== undefined) thumbCache.delete(oldest);
+  }
+  const p = thumbDiskPath(cacheKey);
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, bytes);
+  } catch (e) {
+    if (!app.isPackaged) console.debug("[media] thumb disk write failed:", e);
+  }
+}
+
+/** Look up a thumbnail across both tiers. On a RAM miss, checks disk and
+ *  backfills the RAM LRU so subsequent hits are fast. Returns null if
+ *  absent from both. */
+function lookupThumb(cacheKey: string): Uint8Array | null {
+  const ramHit = thumbCache.get(cacheKey);
+  if (ramHit) {
+    thumbCache.delete(cacheKey);
+    thumbCache.set(cacheKey, ramHit); // LRU bump.
+    return ramHit;
+  }
+  try {
+    const diskHit = new Uint8Array(fs.readFileSync(thumbDiskPath(cacheKey)));
+    // Backfill RAM without re-evicting just for a disk promotion — only
+    // store if there's room; otherwise the disk copy still serves us.
+    if (thumbCache.size < THUMB_CACHE_MAX) thumbCache.set(cacheKey, diskHit);
+    return diskHit;
+  } catch {
+    return null;
+  }
+}
 
 /** Limit concurrent sharp operations. Without this, a grid of 50
  * visible tiles fires 50 parallel libvips decodes — each allocates its
@@ -228,18 +301,16 @@ async function findFfmpeg(): Promise<string | null> {
   return promise;
 }
 
-/** Extract a single frame from a video at ~10% of duration (or 1s) and
- *  resize it with sharp. Cached in the same thumbCache as image thumbnails.
- *  Returns a JPEG Response or null if ffmpeg/sharp fails. */
+/** Extract a single frame from a video at ~1s and resize it with sharp.
+ *  Cached in the two-tier thumbnail cache (RAM LRU + disk). Returns a
+ *  JPEG Response or null if ffmpeg/sharp fails. */
 async function serveVideoThumb(
   requested: string,
   w: number,
 ): Promise<Response | null> {
   const cacheKey = `${requested}?w=${w}&vid=1`;
-  const cached = thumbCache.get(cacheKey);
+  const cached = lookupThumb(cacheKey);
   if (cached) {
-    thumbCache.delete(cacheKey);
-    thumbCache.set(cacheKey, cached);
     return new Response(cached as unknown as BodyInit, {
       headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
     });
@@ -264,11 +335,7 @@ async function serveVideoThumb(
     });
     const buf = await fs.promises.readFile(tmpFile);
     const bytes = new Uint8Array(buf);
-    thumbCache.set(cacheKey, bytes);
-    if (thumbCache.size > THUMB_CACHE_MAX) {
-      const oldest = thumbCache.keys().next().value;
-      if (oldest !== undefined) thumbCache.delete(oldest);
-    }
+    storeThumb(cacheKey, bytes);
     return new Response(bytes as unknown as BodyInit, {
       headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
     });
@@ -282,18 +349,17 @@ async function serveVideoThumb(
 
 
 /** Downscale `requested` to width `w` and return a JPEG Response, or null
- * to signal the caller to fall back to the raw stream. Results are LRU
- * cached. Replaced the old nativeImage path (sync, full-res bitmap decode
- * on the main thread → froze the UI on large images). */
+ * to signal the caller to fall back to the raw stream. Results are cached
+ * in the two-tier thumbnail cache (RAM LRU + disk). Replaced the old
+ * nativeImage path (sync, full-res bitmap decode on the main thread →
+ * froze the UI on large images). */
 async function serveResized(
   requested: string,
   w: number,
 ): Promise<Response | null> {
   const cacheKey = `${requested}?w=${w}`;
-  const cached = thumbCache.get(cacheKey);
+  const cached = lookupThumb(cacheKey);
   if (cached) {
-    thumbCache.delete(cacheKey);
-    thumbCache.set(cacheKey, cached); // LRU bump.
     return new Response(cached as unknown as BodyInit, {
       headers: {
         "Content-Type": "image/jpeg",
@@ -315,11 +381,7 @@ async function serveResized(
         .toBuffer(),
     );
     const bytes = new Uint8Array(jpeg);
-    thumbCache.set(cacheKey, bytes);
-    if (thumbCache.size > THUMB_CACHE_MAX) {
-      const oldest = thumbCache.keys().next().value;
-      if (oldest !== undefined) thumbCache.delete(oldest);
-    }
+    storeThumb(cacheKey, bytes);
     return new Response(bytes as unknown as BodyInit, {
       headers: {
         "Content-Type": "image/jpeg",
