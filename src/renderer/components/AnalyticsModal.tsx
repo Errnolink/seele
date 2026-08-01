@@ -97,21 +97,35 @@ export default function AnalyticsModal({ files, onClose, onOpenMedia }: Analytic
           />
         </div>
 
-        {/* Type distribution bar + legend */}
+        {/* Type distribution — segmented ratio bar matching sidebar telemetry */}
         <div className="flex flex-col gap-2">
-          <div className="h-4 rounded-md overflow-hidden flex border border-nerv-border">
-            <span
-              className="bg-nerv-cyan/60 h-full"
+          <div className="eva-segbar relative h-3 flex">
+            <div
+              className="h-full bg-nerv-cyan shadow-[0_0_8px_#22d3ee]"
               style={{ width: `${stats.imagePct}%` }}
             />
-            <span
-              className="bg-nerv-green/60 h-full"
+            <div
+              className="h-full bg-nerv-green shadow-[0_0_8px_#4ade80]"
               style={{ width: `${stats.videoPct}%` }}
             />
+            {/* dark tick marks */}
+            <div className="absolute inset-0 flex justify-between pointer-events-none">
+              {Array.from({ length: 23 }, (_, i) => (
+                <span key={i} className="w-px h-full bg-black/50" />
+              ))}
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <LegendRow colorClass="bg-nerv-cyan" label={`IMG ${stats.imagePct.toFixed(0)}%`} />
-            <LegendRow colorClass="bg-nerv-green" label={`VID ${stats.videoPct.toFixed(0)}%`} />
+          <div className="flex items-center gap-4 text-[10px] font-mono">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 bg-nerv-cyan shadow-[0_0_6px_#22d3ee]" />
+              <span className="phosphor-cyan">IMG</span>
+              <span className="phosphor-cyan tabular-nums">{stats.imagePct.toFixed(0)}%</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 bg-nerv-green shadow-[0_0_6px_#4ade80]" />
+              <span className="phosphor-green">VID</span>
+              <span className="phosphor-green tabular-nums">{stats.videoPct.toFixed(0)}%</span>
+            </div>
           </div>
         </div>
 
@@ -162,11 +176,3 @@ function StatCard({ label, value, valueClass }: { label: string; value: string; 
   );
 }
 
-function LegendRow({ colorClass, label }: { colorClass: string; label: string }) {
-  return (
-    <div className="flex items-center gap-2 text-[10px] text-nerv-muted tabular-nums">
-      <span className={`w-2.5 h-2.5 rounded-sm ${colorClass}`} />
-      <span>{label}</span>
-    </div>
-  );
-}

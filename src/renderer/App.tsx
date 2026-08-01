@@ -10,6 +10,7 @@ import AnalyticsModal from "./components/AnalyticsModal";
 import BootSequence from "./components/BootSequence";
 import MoveDialog from "./components/MoveDialog";
 import TitleBar from "./components/TitleBar";
+import ActivityLog, { type ActivityEntry } from "./components/ActivityLog";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { formatBytes } from "./utils";
 import { useScanState } from "./hooks/useScanState";
@@ -83,6 +84,16 @@ function buildFolderTree(
     root.count += 1;
     root.size += f.sizeBytes;
   }
+  // Aggregate counts up the tree so parent folders show total descendant files.
+  const aggregate = (nd: FolderNode): { count: number; size: number } => {
+    for (const c of nd.children) {
+      const a = aggregate(c);
+      nd.count += a.count;
+      nd.size += a.size;
+    }
+    return { count: nd.count, size: nd.size };
+  };
+  aggregate(root);
   return root;
 }
 
@@ -312,6 +323,25 @@ export default function App() {
 
   /** State for the in-app move dialog: null = closed, or the file paths to move. */
   const [moveDialogPaths, setMoveDialogPaths] = useState<string[] | null>(null);
+  const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
+  const activityIdRef = useRef(0);
+
+  const logActivity = useCallback(
+    (action: ActivityEntry["action"], fileName: string, detail: string, ok: boolean) => {
+      setActivityLog((prev) => [
+        {
+          id: ++activityIdRef.current,
+          action,
+          fileName,
+          detail,
+          ok,
+          timestamp: Date.now(),
+        },
+        ...prev,
+      ].slice(0, 50));
+    },
+    [],
+  );
 
   /** Open the move dialog for a single file (from context menu). */
   const handleMoveFile = useCallback((file: MediaFile) => {
@@ -341,7 +371,15 @@ export default function App() {
         return next;
       });
     }
-  }, [moveDialogPaths, onRemoveFiles]);
+    const destName = destDir.split(/[\\/]/).pop() || destDir;
+    const okCount = results.filter((r) => r.ok).length;
+    logActivity(
+      "move",
+      okCount === 1 ? paths[0].split(/[\\/]/).pop() || paths[0] : `${okCount} files`,
+      `→ ${destName}`,
+      okCount > 0,
+    );
+  }, [moveDialogPaths, onRemoveFiles, logActivity]);
 
   /** Move files to a specific known directory (sidebar drop / quick move). */
   const handleMoveToDir = useCallback(async (filePaths: string[], destDir: string) => {
@@ -358,15 +396,23 @@ export default function App() {
         return next;
       });
     }
-  }, [onRemoveFiles]);
+    const destName = destDir.split(/[\\/]/).pop() || destDir;
+    const okCount = results.filter((r) => r.ok).length;
+    logActivity(
+      "move",
+      okCount === 1 ? filePaths[0].split(/[\\/]/).pop() || filePaths[0] : `${okCount} files`,
+      `→ ${destName}`,
+      okCount > 0,
+    );
+  }, [onRemoveFiles, logActivity]);
 
-  /** Trash a single file (send to OS recycle bin). */
   const handleTrashFile = useCallback(async (file: MediaFile) => {
     const result = await window.scanAPI.trashFile(file.filePath);
     if (result.ok) {
       onRemoveFiles(new Set([file.filePath]));
     }
-  }, [onRemoveFiles]);
+    logActivity("trash", file.fileName, "", result.ok);
+  }, [onRemoveFiles, logActivity]);
 
   /** Trash all selected files. */
   const handleTrashSelected = useCallback(async () => {
@@ -380,18 +426,24 @@ export default function App() {
       onRemoveFiles(trashed);
       setSelectedIds(new Set());
     }
-  }, [selectedIds, onRemoveFiles]);
+    const okCount = results.filter((r) => r.ok).length;
+    logActivity(
+      "trash",
+      okCount === 1 ? paths[0].split(/[\\/]/).pop() || paths[0] : `${okCount} files`,
+      "",
+      okCount > 0,
+    );
+  }, [selectedIds, onRemoveFiles, logActivity]);
 
   /** Rename a single file in place. */
   const handleRenameFile = useCallback(async (file: MediaFile, newName: string) => {
     const result = await window.scanAPI.renameFile(file.filePath, newName);
     if (result.ok) {
-      // Rename changes the path — remove old, the rescan or next session
-      // picks up the new name. For immediate feedback we just remove old.
       onRemoveFiles(new Set([file.filePath]));
     }
+    logActivity("rename", file.fileName, `→ ${newName}`, result.ok);
     return result;
-  }, [onRemoveFiles]);
+  }, [onRemoveFiles, logActivity]);
 
   // ---- viewer handlers ----
   // Ref to the latest derivedFiles so navigation callbacks stay stable
@@ -421,6 +473,12 @@ export default function App() {
   }, []);
 
   // ---- keyboard shortcuts (§11) ----
+  // Refs so the keyboard handler can call latest handlers without deps churn.
+  const handleMoveSelectedRef = useRef(handleMoveSelected);
+  handleMoveSelectedRef.current = handleMoveSelected;
+  const handleTrashSelectedRef = useRef(handleTrashSelected);
+  handleTrashSelectedRef.current = handleTrashSelected;
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -485,6 +543,31 @@ export default function App() {
         } else if (selectedFolderRef.current !== null) {
           setSelectedFolder(null);
         }
+      }
+
+      // Delete — trash selected files
+      if (e.key === "Delete" && !inEditable && selectedIdsRef.current.size > 0) {
+        e.preventDefault();
+        void handleTrashSelectedRef.current?.();
+        return;
+      }
+      // M — move selected files
+      if (e.key.toLowerCase() === "m" && !inEditable && selectedIdsRef.current.size > 0) {
+        e.preventDefault();
+        handleMoveSelectedRef.current?.();
+        return;
+      }
+      // F2 — rename single selected file
+      if (e.key === "F2" && !inEditable && selectedIdsRef.current.size === 1) {
+        e.preventDefault();
+        const f = derivedFilesRef.current.find((df) =>
+          selectedIdsRef.current.has(df.filePath),
+        );
+        if (f) {
+          const newName = window.prompt("New file name", f.fileName);
+          if (newName && newName !== f.fileName) void handleRenameFile(f, newName);
+        }
+        return;
       }
     };
     window.addEventListener("keydown", handler);
@@ -1073,6 +1156,11 @@ export default function App() {
           onConfirm={handleMoveConfirm}
         />
       )}
+
+      <ActivityLog
+        entries={activityLog}
+        onClear={() => setActivityLog([])}
+      />
 
       {/* Overlays */}
       {showHelp && <KeyboardHelp onClose={() => setShowHelp(false)} />}

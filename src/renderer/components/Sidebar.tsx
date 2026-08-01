@@ -187,6 +187,12 @@ const FolderTreeNode = memo(function FolderTreeNode({
         onClick={() =>
           onSelectFolder(selected ? null : node.path)
         }
+        onDoubleClick={(e) => {
+          if (hasChildren) {
+            e.stopPropagation();
+            onToggleExpand(node.path);
+          }
+        }}
         onDragOver={(e) => {
           if (onDropFiles && selectedIds && selectedIds.size > 0) {
             e.preventDefault();

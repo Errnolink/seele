@@ -400,6 +400,21 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
       setFullResLoaded(false);
     }, [file.filePath]);
 
+    // Preload adjacent images for instant navigation (no flash on next/prev).
+    useEffect(() => {
+      if (!files || isVideo) return;
+      const targets = [currentIndex - 1, currentIndex + 1];
+      for (const i of targets) {
+        if (i >= 0 && i < files.length) {
+          const f = files[i];
+          if (f.fileType !== "video") {
+            const img = new Image();
+            img.src = `${toMediaUrl(f.filePath)}?w=2560`;
+          }
+        }
+      }
+    }, [currentIndex, files, isVideo]);
+
     const cursorClass = isVideo
       ? ""
       : zoom > 1
@@ -526,6 +541,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                 src={previewUrl}
                 controls
                 tabIndex={0}
+                preload="auto"
                 className="max-h-[78vh] max-w-[82vw] outline-none"
                 style={{ border: "1px solid rgba(255,85,0,0.2)" }}
               />

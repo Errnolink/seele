@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useMemo, useState, useDeferredValue } from "react";
 import type { FolderNode } from "../types";
 
 export interface MoveDialogProps {
@@ -10,10 +10,29 @@ export interface MoveDialogProps {
   onConfirm: (destDir: string) => void;
 }
 
+/** Flatten the tree into a list of { node, depth } for fuzzy search. */
+function flattenTree(node: FolderNode, depth = 0): { node: FolderNode; depth: number }[] {
+  const out = [{ node, depth }];
+  for (const c of node.children) out.push(...flattenTree(c, depth + 1));
+  return out;
+}
+
+/** Simple subsequence fuzzy match — all chars of query appear in order. */
+function fuzzyMatch(text: string, query: string): boolean {
+  if (!query) return true;
+  const t = text.toLowerCase();
+  const q = query.toLowerCase();
+  let qi = 0;
+  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+    if (t[ti] === q[qi]) qi++;
+  }
+  return qi === q.length;
+}
+
 /**
  * NERV-styled in-app move dialog. Renders the library's own folder tree
- * as a scrollable pick-list — no OS folder picker. Two clicks: pick a
- * folder, hit MOVE.
+ * as a scrollable pick-list with fuzzy search — type to filter, click to
+ * select, hit MOVE.
  */
 export const MoveDialog: React.FC<MoveDialogProps> = ({
   tree,
@@ -25,6 +44,8 @@ export const MoveDialog: React.FC<MoveDialogProps> = ({
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set([tree.path]),
   );
+  const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query.trim());
 
   const toggle = (p: string) =>
     setExpanded((prev) => {
@@ -34,13 +55,21 @@ export const MoveDialog: React.FC<MoveDialogProps> = ({
       return next;
     });
 
+  // When searching, flatten + filter the tree for a fast pick list.
+  const flatResults = useMemo(() => {
+    if (!deferredQuery) return null;
+    return flattenTree(tree)
+      .filter(({ node }) => fuzzyMatch(node.name, deferredQuery) || fuzzyMatch(node.path, deferredQuery))
+      .slice(0, 100);
+  }, [tree, deferredQuery]);
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="w-[480px] max-h-[70vh] flex flex-col bg-nerv-panel border border-nerv-orange/50 rounded-lg shadow-[0_0_30px_rgba(255,85,0,0.2)]"
+        className="w-[520px] max-h-[75vh] flex flex-col bg-nerv-panel border border-nerv-orange/50 rounded-lg shadow-[0_0_30px_rgba(255,85,0,0.2)]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -57,16 +86,68 @@ export const MoveDialog: React.FC<MoveDialogProps> = ({
           </button>
         </div>
 
-        {/* Tree */}
+        {/* Fuzzy search */}
+        <div className="p-3 border-b border-nerv-border">
+          <div className="relative">
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="SEARCH.FOLDER // type to filter..."
+              autoFocus
+              className="w-full bg-nerv-bg border border-nerv-border px-3 py-2 pl-8 font-mono text-[11px] text-nerv-text placeholder:text-nerv-muted/50 focus:outline-none focus:border-nerv-lime/60 transition-colors"
+            />
+            <svg
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-nerv-muted"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
+              <circle cx="7" cy="7" r="5" />
+              <path d="M11 11l3.5 3.5" />
+            </svg>
+          </div>
+        </div>
+
+        {/* Tree / search results */}
         <div className="flex-1 overflow-y-auto p-2">
-          <TreeList
-            node={tree}
-            depth={0}
-            expanded={expanded}
-            onToggle={toggle}
-            selected={selected}
-            onSelect={setSelected}
-          />
+          {flatResults ? (
+            flatResults.length === 0 ? (
+              <div className="text-center py-8 font-mono text-[10px] text-nerv-muted tracking-wider">
+                NO FOLDERS MATCH "{deferredQuery}"
+              </div>
+            ) : (
+              flatResults.map(({ node, depth }) => {
+                const isSel = selected === node.path;
+                return (
+                  <div
+                    key={node.path}
+                    onClick={() => setSelected(node.path)}
+                    style={{ paddingLeft: 6 + depth * 14 }}
+                    className={`group relative flex items-center gap-1.5 py-[4px] pr-2 cursor-pointer font-mono text-[11px] tracking-wider rounded transition-colors ${
+                      isSel
+                        ? "bg-nerv-orange/15 text-nerv-amber"
+                        : "text-nerv-text hover:bg-nerv-panel-2"
+                    }`}
+                  >
+                    <span className="shrink-0">{isSel ? "▣" : "▢"}</span>
+                    <span className="flex-1 truncate">{node.name}</span>
+                    <span className="shrink-0 text-nerv-muted text-[9px]">{node.count}</span>
+                  </div>
+                );
+              })
+            )
+          ) : (
+            <TreeList
+              node={tree}
+              depth={0}
+              expanded={expanded}
+              onToggle={toggle}
+              selected={selected}
+              onSelect={setSelected}
+            />
+          )}
         </div>
 
         {/* Footer */}
@@ -113,7 +194,6 @@ const TreeList = memo(function TreeList({
   selected,
   onSelect,
 }: TreeListProps) {
-
   const isOpen = expanded.has(node.path);
   const isSel = selected === node.path;
   const hasChildren = node.children.length > 0;
