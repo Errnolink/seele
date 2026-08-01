@@ -1,45 +1,79 @@
 @import "tailwindcss";
 
 /* =========================================================================
- *  NERV × Cyberpunk theme  (Tailwind v4 CSS-first config)
+ *  NERV × Cyberpunk — EVA-ticket UI  (Tailwind v4 CSS-first config)
  *
- *  Translates the project's nerv.* palette + fonts + animations into
- *  @theme tokens. Tailwind v4 auto-generates utilities from these:
- *    --color-nerv-orange      -> bg-nerv-orange / text-nerv-orange / border-nerv-orange
- *    --font-display           -> font-display
- *    --animate-scanline       -> animate-scanline
+ *  v2.6 redesign. Translates the project's nerv.* palette + fonts +
+ *  animations into @theme tokens. Tailwind v4 auto-generates utilities
+ *  from these:
+ *    --color-nerv-orange      -> bg-nerv-orange / text-nerv-orange / ...
+ *    --font-mono              -> font-mono
+ *    --animate-pulse-soft     -> animate-pulse-soft
  *  Opacity modifiers (bg-nerv-orange/30) work because these are real colors.
  * ========================================================================= */
 
 @theme {
-  /* ---- palette ---- */
-  --color-nerv-bg: #0a0a0c; /* deep tactical black */
-  --color-nerv-panel: #14151c; /* gunmetal container background */
-  --color-nerv-panel-2: #1c1d26; /* raised panel */
-  --color-nerv-border: #2a2b36; /* default hairline */
-  --color-nerv-orange: #ff5500; /* NERV emergency orange */
-  --color-nerv-amber: #ffaa00; /* warning text */
-  --color-nerv-cyan: #00f0ff; /* cyberpunk active state */
-  --color-nerv-green: #39ff14; /* cyberpunk terminal green */
-  --color-nerv-text: #e6edf3; /* primary text */
-  --color-nerv-muted: #6b7280; /* secondary text */
+  /* ---- palette (§2.1) ---- */
+  --color-nerv-bg: #07080c; /* app background (near-black, blue tint) */
+  --color-nerv-panel: #0d0f17; /* panel/container background */
+  --color-nerv-panel-2: #141724; /* raised surface (inputs, buttons, hover rows) */
+  --color-nerv-border: #1e2235; /* default hairline border */
+  --color-nerv-border-highlight: #2f3650; /* border hover / promoted */
+  --color-nerv-orange: #ff5500; /* primary ring accent (card selection, focus) */
+  --color-nerv-orange-glow: rgba(255, 85, 0, 0.25); /* glow shadow */
+  --color-nerv-amber: #ffb700; /* gold accent (star, >50MB, default active, Scan) */
+  --color-nerv-cyan: #00f0ff; /* images */
+  --color-nerv-green: #10b981; /* videos / success */
+  --color-nerv-red: #ef4444; /* errors, destructive */
+  --color-nerv-purple: #7c3aed; /* EVA chrome (header, sidebar frame, GROUP) */
+  --color-nerv-lime: #a3e635; /* EVA phosphor text (brand, search, labels, VIEW) */
+  --color-nerv-text: #f1f5f9; /* primary text */
+  --color-nerv-muted: #64748b; /* secondary text, icons, labels */
 
   /* ---- typography ---- */
-  --font-mono: "JetBrains Mono", "Share Tech Mono", ui-monospace, "Cascadia Code",
-    Consolas, monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, Menlo,
+    monospace;
   --font-display: "Orbitron", "JetBrains Mono", system-ui, sans-serif;
 
-  /* ---- custom keyframe animations ---- */
+  --animate-pulse-soft: pulse-soft 2.5s ease-in-out infinite;
+  --animate-glow-orange: glow-orange 2.5s ease-in-out infinite;
   --animate-scanline: scanline 4s linear infinite;
-  --animate-pulse-glow: pulse-glow 1.6s ease-in-out infinite;
-  --animate-blink: blink 1s steps(2, start) infinite;
   --animate-boot-glitch: matrix-glitch 0.5s steps(3, end);
   --animate-scanline-bar: scanline-bar 1.4s ease-in-out infinite;
-  --animate-nerv-shimmer: nerv-shimmer 1.8s ease-in-out infinite;
-  --animate-viewer-enter: viewer-enter 0.2s ease-out;
+  --animate-pulse: pulse-soft 2s ease-in-out infinite;
 }
 
 /* ---- keyframes ---- */
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes glow-orange {
+  0%,
+  100% {
+    box-shadow: 0 0 12px rgba(255, 85, 0, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 24px rgba(255, 85, 0, 0.45);
+  }
+}
+
+/* Skeleton shimmer sweep (§4) — used by .shimmer in index.css */
+@keyframes shimmer-sweep {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
 @keyframes scanline {
   0% {
     transform: translateY(-100%);
@@ -77,51 +111,11 @@
   }
 }
 
-@keyframes pulse-glow {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(255, 85, 0, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 8px 2px rgba(255, 85, 0, 0.6);
-  }
-}
-
-@keyframes blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.2;
-  }
-}
-
 @keyframes scanline-bar {
   0% {
     transform: translateX(-100%);
   }
   100% {
     transform: translateX(400%);
-  }
-}
-
-@keyframes nerv-shimmer {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
-}
-
-@keyframes viewer-enter {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
   }
 }
