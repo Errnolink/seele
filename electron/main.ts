@@ -191,12 +191,25 @@ function getThumbDir(): string {
   return thumbDir;
 }
 
+/** Sniff Content-Type from the first bytes of a cached thumbnail.
+ *  JPEG/PNG/WEBP/GIF all have reliable magic bytes; default to JPEG for
+ *  anything unrecognizable (the historical fallback). */
+function sniffThumbType(bytes: Uint8Array): string {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return "image/webp";
+  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return "image/gif";
+  return "image/jpeg";
+}
+
 /** Map a cache key to a stable, filesystem-safe filename. SHA-1 keeps it
  *  short and collision-free; the leading prefix sharding prevents any
- *  single directory from holding 50k flat entries (faster fs ops). */
+ *  single directory from holding 50k flat entries (faster fs ops). The
+ *  extension is omitted — cached bytes may be JPEG or PNG depending on
+ *  the source's alpha channel, so we sniff on read instead. */
 function thumbDiskPath(cacheKey: string): string {
   const hash = createHash("sha1").update(cacheKey).digest("hex");
-  return path.join(getThumbDir(), hash.slice(0, 2), `${hash}.jpg`);
+  return path.join(getThumbDir(), hash.slice(0, 2), hash);
 }
 
 /** Store a thumbnail in both tiers (RAM LRU + disk) and run eviction.
@@ -312,7 +325,7 @@ async function serveVideoThumb(
   const cached = lookupThumb(cacheKey);
   if (cached) {
     return new Response(cached as unknown as BodyInit, {
-      headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
+      headers: { "Content-Type": sniffThumbType(cached), "Cache-Control": "public, max-age=86400" },
     });
   }
   const ff = await findFfmpeg();
@@ -348,11 +361,13 @@ async function serveVideoThumb(
 }
 
 
-/** Downscale `requested` to width `w` and return a JPEG Response, or null
- * to signal the caller to fall back to the raw stream. Results are cached
- * in the two-tier thumbnail cache (RAM LRU + disk). Replaced the old
- * nativeImage path (sync, full-res bitmap decode on the main thread →
- * froze the UI on large images). */
+/** Downscale `requested` to width `w` and return a Response, or null to
+ *  signal the caller to fall back to the raw stream. Images with an alpha
+ *  channel (transparent PNG/GIF/WebP) are output as PNG to preserve
+ *  transparency; everything else becomes JPEG (smaller, faster). Results
+ *  are cached in the two-tier thumbnail cache (RAM LRU + disk). Replaced
+ *  the old nativeImage path (sync, full-res bitmap decode on the main
+ *  thread → froze the UI on large images). */
 async function serveResized(
   requested: string,
   w: number,
@@ -362,7 +377,7 @@ async function serveResized(
   if (cached) {
     return new Response(cached as unknown as BodyInit, {
       headers: {
-        "Content-Type": "image/jpeg",
+        "Content-Type": sniffThumbType(cached),
         "Cache-Control": "public, max-age=86400",
       },
     });
@@ -373,18 +388,24 @@ async function serveResized(
     if (stat.size > 64 * 1024 * 1024) return null;
     // sharp's streaming decoder never holds the full-res bitmap in JS
     // heap; libvips downsamples on the fly via a pixel pipe.
-    const jpeg = await withSharpLimit(() =>
-      sharp(requested, { sequentialRead: true })
+    // Probe alpha: transparent PNG/GIF/WebP must stay PNG (JPEG has no
+    // alpha channel and would flatten transparency to black). Everything
+    // else becomes JPEG (smaller, faster, mozbetter compression).
+    const meta = await withSharpLimit(() => sharp(requested).metadata());
+    const hasAlpha = meta.hasAlpha ?? false;
+    const bytes = await withSharpLimit(() => {
+      const pipe = sharp(requested, { sequentialRead: true })
         .rotate() // honor EXIF orientation
-        .resize({ width: w, withoutEnlargement: true })
-        .jpeg({ quality: 80, mozjpeg: true })
-        .toBuffer(),
-    );
-    const bytes = new Uint8Array(jpeg);
-    storeThumb(cacheKey, bytes);
-    return new Response(bytes as unknown as BodyInit, {
+        .resize({ width: w, withoutEnlargement: true });
+      return hasAlpha
+        ? pipe.png({ quality: 80, compressionLevel: 6, palette: false }).toBuffer()
+        : pipe.jpeg({ quality: 80, mozjpeg: true }).toBuffer();
+    });
+    const out = new Uint8Array(bytes);
+    storeThumb(cacheKey, out);
+    return new Response(out as unknown as BodyInit, {
       headers: {
-        "Content-Type": "image/jpeg",
+        "Content-Type": hasAlpha ? "image/png" : "image/jpeg",
         "Cache-Control": "public, max-age=86400",
       },
     });
@@ -620,13 +641,40 @@ ipcMain.handle("scan:cancel", () => {
  * Restore a previously scanned folder instantly from the on-disk cache,
  * without a filesystem walk. The renderer calls this on startup; the user
  * can still re-scan to pick up added/removed/edited files (v4 rework).
+ *
+ * Files removed outside the app (via Explorer, `del`, etc.) would leave
+ * stale entries whose thumbnails 404 → "UNREADABLE". We stat each cached
+ * path and prune the missing ones from both the returned list and the
+ * on-disk cache so the gallery never shows dead entries from a prior
+ * session.
  */
-ipcMain.handle("scan:loadCached", (_e, folderPath: string) => {
+ipcMain.handle("scan:loadCached", async (_e, folderPath: string) => {
   if (typeof folderPath !== "string" || folderPath.length === 0) return [];
   // Whitelist the root so cached thumbnails can load via media://.
   allowedRoots.clear();
   allowedRoots.add(normalizeRoot(folderPath));
-  return mediaCache.loadCachedFiles(folderPath);
+  const cached = mediaCache.loadCachedFiles(folderPath);
+  if (cached.length === 0) return cached;
+  // Batch-check existence. fs.promises.access is cheap per call; for a
+  // 50k-entry library this is ~50k stats, but they run concurrently and
+  // each is sub-millisecond on a local SSD. The alternative — serving a
+  // 404 and letting the tile error out — is strictly worse UX.
+  const checks = await Promise.all(
+    cached.map(async (f) => {
+      try {
+        await fs.promises.access(f.filePath, fs.constants.R_OK);
+        return null;
+      } catch {
+        return f.filePath;
+      }
+    }),
+  );
+  const missing = checks.filter((p): p is string => p !== null);
+  if (missing.length > 0) {
+    mediaCache.removeFiles(missing);
+    return cached.filter((f) => !missing.includes(f.filePath));
+  }
+  return cached;
 });
 
 /** Whether a folder has any cached files (for the startup restore check). */
