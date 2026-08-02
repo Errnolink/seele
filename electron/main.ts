@@ -1016,7 +1016,7 @@ ipcMain.handle("file:insights", async (_e, filePath: string): Promise<FileInsigh
             .raw()
             .toBuffer({ resolveWithObject: true }),
         );
-        const pal = medianCutPalette(raw.data, raw.info.width * raw.info.height, 4);
+        const pal = medianCutPalette(raw.data, raw.info.width * raw.info.height, 6);
         for (const c of pal) {
           const rr = Math.round(c.r), gg = Math.round(c.g), bb = Math.round(c.b);
           colors.push({ r: rr, g: gg, b: bb, hex: toHex(rr, gg, bb) });

@@ -42,7 +42,8 @@ type ScanAction =
   | { type: "cancelled" }
   | { type: "restore"; files: MediaFile[] }
   | { type: "metaBatch"; patches: MetaPatch[] }
-  | { type: "removeFiles"; filePaths: Set<string> };
+  | { type: "removeFiles"; filePaths: Set<string> }
+  | { type: "addFiles"; files: MediaFile[] };
 
 const initialState: ScanState = {
   batches: [],
@@ -162,6 +163,17 @@ function scanReducer(state: ScanState, action: ScanAction): ScanState {
     }
     case "cancelled":
       return { ...state, status: "cancelled", progress: null };
+    case "addFiles": {
+      // Re-add files after a trash-queue restore or rename (no rescan —
+      // the file was never removed from disk, only from local state).
+      if (action.files.length === 0) return state;
+      return {
+        ...state,
+        batches: [...state.batches, action.files],
+        filesVersion: state.filesVersion + 1,
+        count: state.count + action.files.length,
+      };
+    }
     default: {
       const _exhaustive: never = action;
       return _exhaustive;
@@ -197,6 +209,8 @@ export interface UseScanStateReturn {
   onMetaBatch: (patches: MetaPatch[]) => void;
   /** Remove files from local state after move/trash operations. */
   onRemoveFiles: (filePaths: Set<string>) => void;
+  /** Re-add files to local state (trash-queue restore / rename). */
+  onAddFiles: (files: MediaFile[]) => void;
 }
 
 /**
@@ -308,6 +322,10 @@ export function useScanState(): UseScanStateReturn {
     (filePaths: Set<string>) => dispatch({ type: "removeFiles", filePaths }),
     [],
   );
+  const onAddFiles = useCallback(
+    (files: MediaFile[]) => dispatch({ type: "addFiles", files }),
+    [],
+  );
 
-  return { state, files, onStart, onReset, onBatch, onProgress, onDone, onError, onCancelled, onRestore, onMetaBatch, onRemoveFiles };
+  return { state, files, onStart, onReset, onBatch, onProgress, onDone, onError, onCancelled, onRestore, onMetaBatch, onRemoveFiles, onAddFiles };
 }

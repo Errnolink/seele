@@ -15,6 +15,7 @@ import BatchTagDialog from "./components/BatchTagDialog";
 import TitleBar from "./components/TitleBar";
 import ActivityLog, { type ActivityEntry } from "./components/ActivityLog";
 import SessionChangesModal from "./components/SessionChangesModal";
+import TrashQueueModal from "./components/TrashQueueModal";
 import SettingsModal from "./components/SettingsModal";
 import { DEFAULT_SETTINGS } from "./settingsDefaults";
 import type { AppSettings } from "../../electron/settings";
@@ -131,6 +132,7 @@ export default function App() {
     onRestore,
     onMetaBatch,
     onRemoveFiles,
+    onAddFiles,
   } = useScanState();
 
   // ---- tag classification system (v2.5) ----
@@ -404,8 +406,15 @@ export default function App() {
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const activityIdRef = useRef(0);
 
+  // ---- trash queue (ui-upgrade.md Issue 1) ----
+  // Staged deletions: nothing touches disk until Delete Forever / Empty
+  // Queue commits. Session-only — closing the app silently discards the
+  // queue (files were never sent to the OS trash).
+  const [trashQueue, setTrashQueue] = useState<Map<string, { file: MediaFile; queuedAt: number }>>(new Map());
+  const [showTrashQueue, setShowTrashQueue] = useState(false);
+
   const logActivity = useCallback(
-    (action: ActivityEntry["action"], fileName: string, detail: string, ok: boolean) => {
+    (action: ActivityEntry["action"], fileName: string, detail: string, ok: boolean, meta?: { fromPath?: string; toPath?: string }) => {
       setActivityLog((prev) => [
         {
           id: ++activityIdRef.current,
@@ -414,6 +423,7 @@ export default function App() {
           detail,
           ok,
           timestamp: Date.now(),
+          ...(meta ? { fromPath: meta.fromPath, toPath: meta.toPath } : {}),
         },
         ...prev,
       ].slice(0, 50));
@@ -432,6 +442,26 @@ export default function App() {
     setMoveDialogPaths([...selectedIds]);
   }, [selectedIds]);
 
+  /**
+   * Keep the viewer on the next file when the one it's showing leaves the
+   * active set (trash/move) — only close when it was the last file
+   * (ui-upgrade.md Issue 2B). Must run BEFORE onRemoveFiles so the file
+   * still exists in derivedFilesRef when we read the next one.
+   */
+  const advanceViewer = useCallback((removedPaths: Set<string>) => {
+    if (viewerIndexRef.current === null || viewerFilePathRef.current === null) return;
+    if (!removedPaths.has(viewerFilePathRef.current)) return;
+    const arr = derivedFilesRef.current;
+    const idx = viewerIndexRef.current;
+    const next = arr[idx + 1];
+    if (next) {
+      viewerFilePathRef.current = next.filePath;
+    } else {
+      setViewerIndex(null);
+      viewerFilePathRef.current = null;
+    }
+  }, []);
+
   /** Execute the move once the user picks a destination in the dialog. */
   const handleMoveConfirm = useCallback(async (destDir: string) => {
     const paths = moveDialogPaths;
@@ -442,6 +472,9 @@ export default function App() {
       results.filter((r) => r.ok).map((r) => r.filePath),
     );
     if (moved.size > 0) {
+      // Auto-advance the viewer if the file it was showing got moved
+      // (ui-upgrade.md Issue 2B).
+      advanceViewer(moved);
       onRemoveFiles(moved);
       setSelectedIds((prev) => {
         const next = new Set(prev);
@@ -451,13 +484,20 @@ export default function App() {
     }
     const destName = destDir.split(/[\\/]/).pop() || destDir;
     const okCount = results.filter((r) => r.ok).length;
+    const newPathByOld = new Map(
+      results.filter((r): r is { filePath: string; ok: boolean; newPath: string; error?: string } => Boolean(r.ok && r.newPath))
+        .map((r) => [r.filePath, r.newPath]),
+    );
     logActivity(
       "move",
       okCount === 1 ? paths[0].split(/[\\/]/).pop() || paths[0] : `${okCount} files`,
       `→ ${destName}`,
       okCount > 0,
+      paths.length === 1 && okCount === 1
+        ? { fromPath: paths[0], toPath: newPathByOld.get(paths[0]) }
+        : undefined,
     );
-  }, [moveDialogPaths, onRemoveFiles, logActivity]);
+  }, [moveDialogPaths, onRemoveFiles, logActivity, advanceViewer]);
 
   /** Move files to a specific known directory (sidebar drop / quick move). */
   const handleMoveToDir = useCallback(async (filePaths: string[], destDir: string) => {
@@ -467,6 +507,7 @@ export default function App() {
       results.filter((r) => r.ok).map((r) => r.filePath),
     );
     if (moved.size > 0) {
+      advanceViewer(moved);
       onRemoveFiles(moved);
       setSelectedIds((prev) => {
         const next = new Set(prev);
@@ -482,46 +523,175 @@ export default function App() {
       `→ ${destName}`,
       okCount > 0,
     );
-  }, [onRemoveFiles, logActivity]);
+  }, [onRemoveFiles, logActivity, advanceViewer]);
 
-  const handleTrashFile = useCallback(async (file: MediaFile) => {
-    const result = await window.scanAPI.trashFile(file.filePath);
-    if (result.ok) {
-      onRemoveFiles(new Set([file.filePath]));
-    }
-    logActivity("trash", file.fileName, "", result.ok);
-  }, [onRemoveFiles, logActivity]);
+  /** Stage files for trash — removes them from the grid, nothing on disk. */
+  const queueForTrash = useCallback((filesToQueue: MediaFile[]) => {
+    if (filesToQueue.length === 0) return;
+    setTrashQueue((prev) => {
+      const next = new Map(prev);
+      const now = Date.now();
+      for (const f of filesToQueue) {
+        if (!next.has(f.filePath)) next.set(f.filePath, { file: f, queuedAt: now });
+      }
+      return next;
+    });
+    onRemoveFiles(new Set(filesToQueue.map((f) => f.filePath)));
+  }, [onRemoveFiles]);
 
-  /** Trash all selected files. */
-  const handleTrashSelected = useCallback(async () => {
+  /** Grid context-menu / card trash button → stage, don't delete. */
+  const handleTrashFile = useCallback((file: MediaFile) => {
+    queueForTrash([file]);
+  }, [queueForTrash]);
+
+  /** Trash all selected files → stage them all. */
+  const handleTrashSelected = useCallback(() => {
     if (selectedIds.size === 0) return;
-    const paths = [...selectedIds];
-    const results = await window.scanAPI.trashFiles(paths);
-    const trashed = new Set(
-      results.filter((r) => r.ok).map((r) => r.filePath),
-    );
-    if (trashed.size > 0) {
-      onRemoveFiles(trashed);
-      setSelectedIds(new Set());
+    const queued = derivedFilesRef.current.filter((f) => selectedIds.has(f.filePath));
+    queueForTrash(queued);
+    setSelectedIds(new Set());
+  }, [selectedIds, queueForTrash]);
+
+  /** Pull a staged file back into the grid — no disk operation ever happened. */
+  const restoreFromQueue = useCallback((filePath: string) => {
+    const entry = trashQueue.get(filePath);
+    if (!entry) return;
+    setTrashQueue((prev) => {
+      const next = new Map(prev);
+      next.delete(filePath);
+      return next;
+    });
+    onAddFiles([entry.file]);
+  }, [trashQueue, onAddFiles]);
+
+  /** Commit a single staged file to the OS trash, now. */
+  const deleteFromQueue = useCallback(async (filePath: string) => {
+    const entry = trashQueue.get(filePath);
+    if (!entry) return;
+    const result = await window.scanAPI.trashFile(filePath);
+    if (result.ok) {
+      setTrashQueue((prev) => {
+        const next = new Map(prev);
+        next.delete(filePath);
+        return next;
+      });
+      logActivity("trash", entry.file.fileName, "", true);
+    } else {
+      // Keep the entry queued so the user can retry.
+      logActivity("trash", entry.file.fileName, result.error ?? "failed", false);
     }
-    const okCount = results.filter((r) => r.ok).length;
-    logActivity(
-      "trash",
-      okCount === 1 ? paths[0].split(/[\\/]/).pop() || paths[0] : `${okCount} files`,
-      "",
-      okCount > 0,
-    );
-  }, [selectedIds, onRemoveFiles, logActivity]);
+  }, [trashQueue, logActivity]);
+
+  /** Commit every staged file to the OS trash (the only batch delete path). */
+  const emptyTrashQueue = useCallback(async () => {
+    const paths = [...trashQueue.keys()];
+    if (paths.length === 0) return;
+    const results = await window.scanAPI.trashFiles(paths);
+    const ok = new Set(results.filter((r) => r.ok).map((r) => r.filePath));
+    setTrashQueue((prev) => {
+      const next = new Map(prev);
+      for (const p of ok) next.delete(p);
+      return next;
+    });
+    const okCount = ok.size;
+    if (okCount > 0) {
+      const firstName = [...trashQueue.values()].find((e) => ok.has(e.file.filePath))?.file.fileName;
+      logActivity(
+        "trash",
+        okCount === 1 ? firstName ?? "1 file" : `${okCount} files`,
+        "",
+        true,
+      );
+    }
+  }, [trashQueue, logActivity]);
+
+  /** Viewer trash button / Delete key: stage + auto-advance. */
+  const handleViewerTrash = useCallback((file: MediaFile) => {
+    queueForTrash([file]);
+    advanceViewer(new Set([file.filePath]));
+  }, [queueForTrash, advanceViewer]);
 
   /** Rename a single file in place. */
   const handleRenameFile = useCallback(async (file: MediaFile, newName: string) => {
     const result = await window.scanAPI.renameFile(file.filePath, newName);
-    if (result.ok) {
+    if (result.ok && result.newPath) {
+      // Re-add the renamed file under its new path so it stays in the grid
+      // (and the viewer keeps showing it instead of blanking out).
+      const renamed: MediaFile = {
+        ...file,
+        filePath: result.newPath,
+        fileName: newName,
+        fileNameLower: newName.toLowerCase(),
+        normPath: result.newPath.replace(/\\/g, "/").toLowerCase(),
+      };
+      if (viewerFilePathRef.current === file.filePath) {
+        viewerFilePathRef.current = result.newPath;
+      }
       onRemoveFiles(new Set([file.filePath]));
+      onAddFiles([renamed]);
     }
-    logActivity("rename", file.fileName, `→ ${newName}`, result.ok);
+    logActivity(
+      "rename",
+      file.fileName,
+      `→ ${newName}`,
+      result.ok,
+      result.ok ? { fromPath: file.filePath, toPath: result.newPath } : undefined,
+    );
     return result;
-  }, [onRemoveFiles, logActivity]);
+  }, [onRemoveFiles, onAddFiles, logActivity]);
+
+  /**
+   * Revert a committed move/rename by running the inverse disk operation
+   * (ui-upgrade.md Issue 1.5). Only single-file operations carry paths.
+   */
+  const revertEntry = useCallback(async (entry: ActivityEntry) => {
+    if (!entry.ok || !entry.fromPath || !entry.toPath) return;
+    if (entry.action === "move") {
+      const origDir = entry.fromPath.replace(/[\\/][^\\/]+$/, "");
+      const result = await window.scanAPI.moveFile(entry.toPath, origDir);
+      logActivity(
+        "move",
+        entry.fileName,
+        `↩ revert ${result.ok ? "OK" : `FAILED: ${result.error ?? "?"}`}`,
+        result.ok,
+        result.ok ? { fromPath: entry.toPath, toPath: result.newPath } : undefined,
+      );
+      return;
+    }
+    if (entry.action === "rename") {
+      const origName = entry.fromPath.split(/[\\/]/).pop() ?? entry.fileName;
+      const result = await window.scanAPI.renameFile(entry.toPath, origName);
+      logActivity(
+        "rename",
+        entry.fileName,
+        `↩ revert ${result.ok ? "OK" : `FAILED: ${result.error ?? "?"}`}`,
+        result.ok,
+        result.ok ? { fromPath: entry.toPath, toPath: result.newPath } : undefined,
+      );
+    }
+  }, [logActivity]);
+
+  /** Ctrl+Z: undo the most recent organizing action (viewer). */
+  const undoLastAction = useCallback(() => {
+    const last = activityLog[0];
+    if (
+      last &&
+      last.ok &&
+      last.fromPath &&
+      last.toPath &&
+      (last.action === "move" || last.action === "rename")
+    ) {
+      void revertEntry(last);
+      return;
+    }
+    // Nothing committed (or not undoable) — restore the most recent staged
+    // trash instead; it's pure app state and always reversible.
+    let latest: { filePath: string; queuedAt: number } | null = null;
+    for (const [filePath, e] of trashQueue) {
+      if (!latest || e.queuedAt > latest.queuedAt) latest = { filePath, queuedAt: e.queuedAt };
+    }
+    if (latest) restoreFromQueue(latest.filePath);
+  }, [activityLog, trashQueue, revertEntry, restoreFromQueue]);
 
   // ---- viewer handlers ----
   // Ref to the latest derivedFiles so navigation callbacks stay stable
@@ -587,6 +757,11 @@ export default function App() {
         return;
       }
       if (inEditable) return;
+
+      // The viewer has its own key handling for Delete/M/F2/R/etc. — the
+      // grid shortcuts below must not double-fire while it's open
+      // (ui-upgrade.md Issue 2A).
+      if (viewerIndexRef.current !== null) return;
 
       // ? — toggle keyboard help
       if (e.key === "?" || (e.shiftKey && e.key === "/")) {
@@ -1453,7 +1628,19 @@ export default function App() {
           }}
           onMove={handleMoveFile}
           onRename={(f) => setRenameDialogFile(f)}
-          onTrash={handleTrashFile}
+          onTrash={handleViewerTrash}
+          onToggleFavorite={toggleFavorite}
+          isFavorite={viewerFilePathRef.current !== null && favorites.has(viewerFilePathRef.current)}
+          onUndo={undoLastAction}
+          queuedCount={trashQueue.size}
+          modalOpen={moveDialogPaths !== null || renameDialogFile !== null || showTrashQueue}
+          tags={tagSystem.tags}
+          fileTags={
+            viewerFilePathRef.current
+              ? tagSystem.getFileTags(viewerFilePathRef.current)
+              : undefined
+          }
+          onToggleFileTag={tagSystem.toggleFileTag}
         />
       )}
 
@@ -1538,8 +1725,32 @@ export default function App() {
             setActivityLog([]);
             setShowSessionLog(false);
           }}
+          onRevert={revertEntry}
         />
       )}
+
+      {/* Trash Queue badge + modal (ui-upgrade.md Issue 1) */}
+      {trashQueue.size > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowTrashQueue(true)}
+          className="fixed bottom-6 left-6 z-40 flex items-center gap-2 px-4 py-1.5 bg-nerv-panel border border-nerv-red/40 text-nerv-red text-[10px] font-mono font-bold tracking-wider hover:bg-nerv-red/10 hover:shadow-[0_0_12px_rgba(255,77,48,0.3)] transition-[background-color,color,box-shadow]"
+        >
+          <span className="w-1.5 h-1.5 bg-nerv-red animate-pulse-soft" />
+          TRASH QUEUE
+          <span className="tag-chip bg-nerv-red/20 px-1.5 py-0.5 text-[9px]">
+            {trashQueue.size}
+          </span>
+        </button>
+      )}
+      <TrashQueueModal
+        open={showTrashQueue}
+        entries={[...trashQueue.values()]}
+        onClose={() => setShowTrashQueue(false)}
+        onRestore={restoreFromQueue}
+        onDelete={(filePath) => void deleteFromQueue(filePath)}
+        onEmptyAll={() => void emptyTrashQueue()}
+      />
 
       {/* Settings — performance & accessibility knobs (issues.md item 6) */}
       {showSettings && (

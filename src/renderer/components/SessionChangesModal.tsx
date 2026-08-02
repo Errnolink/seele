@@ -198,7 +198,7 @@ export const SessionChangesModal: React.FC<SessionChangesModalProps> = memo(
                           </span>
                         </td>
                         <td className="px-5 py-2 text-right">
-                          {onRevert && entry.ok && (
+                          {onRevert && entry.ok && entry.action !== "trash" && (
                             <button
                               type="button"
                               onClick={() => onRevert(entry)}

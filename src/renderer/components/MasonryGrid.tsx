@@ -24,6 +24,15 @@ import React, {
 import type { GroupMode, MediaFile, ViewMode } from "../types";
 import { formatBytes, formatDate } from "../utils";
 import type { TagDef } from "../hooks/useTags";
+import { dirName, hasCameraData, plateId, type FileInsights } from "../inspectorUtils";
+import {
+  CameraSection,
+  ColorSpectrum,
+  FileDetails,
+  HashSection,
+  QuickActions,
+  TagManager,
+} from "./InspectorParts";
 
 // ── Layout constants ─────────────────────────────────────────────────
 /** Header bar height (group label row) in px. */
@@ -82,17 +91,6 @@ function tileUrl(file: MediaFile, tileWidth: number): string {
   // Both images and videos get ?w= — the main process routes video
   // thumbnails through ffmpeg frame extraction.
   return `${base}?w=${w}`;
-}
-
-/** Derive a stable EVA-style plate ID (e.g. "EVA-00042") from a file path.
- *  Uses a simple deterministic hash so the same file always gets the same
- *  plate number without needing its array index. */
-function plateId(filePath: string): string {
-  let hash = 0;
-  for (let i = 0; i < filePath.length; i++) {
-    hash = ((hash << 5) - hash + filePath.charCodeAt(i)) | 0;
-  }
-  return `EVA-${String(Math.abs(hash) % 100000).padStart(5, "0")}`;
 }
 
 // ── MediaCard (memoized grid/masonry tile) ──────────────────────────
@@ -722,6 +720,8 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
             onMove={onMove}
             onRename={onRename}
             onTrash={onTrash}
+            isFavorite={activeInspectFile ? favorites.has(activeInspectFile.filePath) : false}
+            onToggleFavorite={onToggleFavorite}
             tags={tags}
             fileTags={activeInspectFile && fileTagGetter ? fileTagGetter(activeInspectFile.filePath) : undefined}
             onToggleFileTag={onToggleFileTag}
@@ -1240,85 +1240,6 @@ const ListView = memo(function ListView({
 });
 
 // ── Split inspector card ────────────────────────────────────────────
-/** Inline tag manager for the Inspector dock — shows assigned tags as pills
- *  and an expandable grid to toggle all available tags (v2.5 §Module 6.4). */
-function InspectorTagManager({
-  tags,
-  fileTags,
-  filePath,
-  onToggleFileTag,
-}: {
-  tags: TagDef[];
-  fileTags: TagDef[];
-  filePath: string;
-  onToggleFileTag: (filePath: string, tagKey: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const assignedKeys = useMemo(() => new Set(fileTags.map((t) => t.key)), [fileTags]);
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-center justify-between">
-        <span className="text-[9px] font-bold tracking-[0.2em] text-nerv-muted uppercase">
-          Tags
-        </span>
-        <button
-          type="button"
-          onClick={() => setEditing((e) => !e)}
-          className="text-[8px] font-mono tracking-wider text-nerv-orange/80 hover:text-nerv-orange border border-nerv-orange/30 px-1.5 py-0.5 hover:bg-nerv-orange/10"
-        >
-          {editing ? "DONE" : "EDIT TAGS"}
-        </button>
-      </div>
-
-      {/* Assigned tag pills */}
-      {fileTags.length > 0 ? (
-        <div className="flex flex-wrap gap-1">
-          {fileTags.map((tag) => (
-            <span
-              key={tag.key}
-              className="tag-chip px-1.5 py-0.5 text-[9px] font-mono font-bold tracking-wider"
-              style={{
-                color: tag.color,
-                backgroundColor: tag.bg,
-                border: `1px solid ${tag.border}`,
-              }}
-            >
-              {tag.label}
-            </span>
-          ))}
-        </div>
-      ) : (
-        <span className="text-[9px] font-mono text-nerv-muted">No tags assigned</span>
-      )}
-
-      {/* Editable tag grid */}
-      {editing && (
-        <div className="flex flex-wrap gap-1 mt-1 p-2 bg-nerv-bg border border-nerv-border">
-          {tags.map((tag) => {
-            const assigned = assignedKeys.has(tag.key);
-            return (
-              <button
-                key={tag.key}
-                type="button"
-                onClick={() => onToggleFileTag(filePath, tag.key)}
-                className="tag-chip px-1.5 py-0.5 text-[8px] font-mono font-bold tracking-wider transition-colors"
-                style={{
-                  color: assigned ? tag.color : "#6a6a65",
-                  backgroundColor: assigned ? tag.bg : "transparent",
-                  border: `1px solid ${assigned ? tag.border : "#2e2e34"}`,
-                }}
-              >
-                {tag.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 
 interface InspectorCardProps {
   file: MediaFile | null;
@@ -1333,6 +1254,9 @@ interface InspectorCardProps {
   onMove?: (file: MediaFile) => void;
   onRename?: (file: MediaFile) => void;
   onTrash?: (file: MediaFile) => void;
+  /** Favorite state for the inspected file. */
+  isFavorite?: boolean;
+  onToggleFavorite?: (file: MediaFile) => void;
   /** Tag system props — v2.5 §Module 6.4 */
   tags?: TagDef[];
   fileTags?: TagDef[];
@@ -1348,16 +1272,13 @@ const InspectorCard = memo(function InspectorCard({
   onMove,
   onRename,
   onTrash,
+  isFavorite,
+  onToggleFavorite,
   tags,
   fileTags,
   onToggleFileTag,
 }: InspectorCardProps) {
-  type Insights = {
-    hash: string;
-    colors: Array<{ r: number; g: number; b: number; hex: string }>;
-    camera: { make?: string; model?: string; lens?: string; fNumber?: number; iso?: number; exposure?: string };
-  };
-  const [insights, setInsights] = useState<Insights | null>(null);
+  const [insights, setInsights] = useState<FileInsights | null>(null);
   const [loading, setLoading] = useState(false);
 
   // Derive position in the flat list for the nav bar (e.g. "3 / 2400").
@@ -1475,7 +1396,7 @@ const InspectorCard = memo(function InspectorCard({
 
           {/* D. Tags section */}
           {tags && onToggleFileTag && (
-            <InspectorTagManager
+            <TagManager
               tags={tags}
               fileTags={fileTags ?? []}
               filePath={file.filePath}
@@ -1483,125 +1404,29 @@ const InspectorCard = memo(function InspectorCard({
             />
           )}
 
-          {/* E. Action toolbar */}
-          {(onMove || onRename || onTrash) && (
-            <div className="grid grid-cols-3 border border-nerv-border">
-              {onMove && (
-                <button
-                  type="button"
-                  onClick={() => onMove(file)}
-                  title="Move"
-                  className="flex flex-col items-center gap-1 py-2 text-nerv-text-dim hover:text-nerv-lime hover:bg-nerv-lime/5 transition-colors border-r border-nerv-border"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 8h12M11 4l4 4-4 4M21 4v16" /></svg>
-                  <span className="text-[8px] font-bold tracking-wider">MOVE</span>
-                </button>
-              )}
-              {onRename && (
-                <button
-                  type="button"
-                  onClick={() => onRename(file)}
-                  title="Rename"
-                  className="flex flex-col items-center gap-1 py-2 text-nerv-text-dim hover:text-nerv-amber hover:bg-nerv-amber/5 transition-colors border-r border-nerv-border"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
-                  <span className="text-[8px] font-bold tracking-wider">RENAME</span>
-                </button>
-              )}
-              {onTrash && (
-                <button
-                  type="button"
-                  onClick={() => onTrash(file)}
-                  title="Trash"
-                  className="flex flex-col items-center gap-1 py-2 text-nerv-text-dim hover:text-nerv-red hover:bg-nerv-red/5 transition-colors"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14" /></svg>
-                  <span className="text-[8px] font-bold tracking-wider">TRASH</span>
-                </button>
-              )}
-            </div>
+          {/* E. Quick actions — shared 2x2 grid (Favorite added for parity) */}
+          {(onToggleFavorite || onMove || onRename || onTrash) && (
+            <QuickActions
+              file={file}
+              isFavorite={isFavorite ?? false}
+              onToggleFavorite={onToggleFavorite}
+              onMove={onMove}
+              onRename={onRename}
+              onTrash={onTrash}
+            />
           )}
 
-          {/* F. Metadata key-value list */}
-          <div className="flex flex-col">
-            <StatRow label="Resolution" value={file.width > 0 && file.height > 0 ? `${file.width}x${file.height}` : "\u2014"} />
-            <StatRow label="Size" value={formatBytes(file.sizeBytes)} valueClass="text-nerv-cyan" />
-            <StatRow label="Aspect" value={file.width > 0 && file.height > 0 ? aspectRatio(file.width, file.height) : "\u2014"} />
-            <StatRow label="Megapixels" value={file.width > 0 && file.height > 0 ? `${((file.width * file.height) / 1e6).toFixed(1)} MP` : "\u2014"} />
-            <StatRow label="Created" value={formatDate(file.birthtimeMs)} />
-          </div>
+          {/* F. File details — type/size/resolution/aspect/megapixels/created */}
+          <FileDetails file={file} />
 
           {/* G. Color spectrum — dominant colors + gradient bar */}
-          <div className="flex flex-col gap-1.5">
-            <span className="text-[9px] font-bold tracking-[0.2em] text-nerv-muted uppercase">Color Spectrum</span>
-            {loading && !insights ? (
-              <div className="h-8 bg-nerv-bg border border-nerv-border animate-pulse" />
-            ) : insights && insights.colors.length > 0 ? (
-              <>
-                {/* Gradient spectrum bar built from extracted swatches */}
-                <div
-                  className="h-6 w-full border border-nerv-border"
-                  style={{
-                    background: `linear-gradient(90deg, ${insights.colors.map((c) => c.hex).join(", ")})`,
-                  }}
-                />
-                {/* Individual swatch chips */}
-                <div className="flex gap-1">
-                  {insights.colors.map((c, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => void window.scanAPI.writeClipboard(c.hex)}
-                      title={`Copy ${c.hex}`}
-                      className="flex-1 group/swatch flex flex-col items-center gap-0.5"
-                    >
-                      <span
-                        className="w-full h-8 border border-nerv-border group-hover/swatch:border-nerv-amber transition-colors"
-                        style={{ backgroundColor: c.hex }}
-                      />
-                      <span className="text-[8px] text-nerv-muted group-hover/swatch:text-nerv-amber transition-colors uppercase">{c.hex}</span>
-                    </button>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div className="h-8 flex items-center justify-center text-[9px] text-nerv-muted border border-nerv-border bg-nerv-bg">
-                No color data
-              </div>
-            )}
-          </div>
+          <ColorSpectrum colors={insights?.colors} loading={loading && !insights} />
 
-          {/* H. Camera info (EXIF) */}
-          <div className="flex flex-col">
-            <span className="text-[9px] font-bold tracking-[0.2em] text-nerv-muted uppercase mb-1">Camera</span>
-            <StatRow label="Make" value={insights?.camera.make || "\u2014"} />
-            <StatRow label="Model" value={insights?.camera.model || "\u2014"} />
-            <StatRow label="Lens" value={insights?.camera.lens || "\u2014"} />
-            <StatRow label="Aperture" value={insights?.camera.fNumber ? `f/${insights.camera.fNumber}` : "\u2014"} />
-            <StatRow label="ISO" value={insights?.camera.iso != null ? String(insights.camera.iso) : "\u2014"} />
-            <StatRow label="Exposure" value={insights?.camera.exposure ? `${insights.camera.exposure}s` : "\u2014"} />
-          </div>
+          {/* H. Camera info (EXIF) — only when at least one field has data */}
+          {hasCameraData(insights?.camera) && <CameraSection camera={insights?.camera} />}
 
-          {/* G. Hash section */}
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center justify-between">
-              <span className="text-[9px] font-bold tracking-[0.2em] text-nerv-muted uppercase">Hash</span>
-              {hash && (
-                <button
-                  type="button"
-                  onClick={() => void window.scanAPI.writeClipboard(hash)}
-                  title="Copy hash"
-                  className="flex items-center gap-1 text-[9px] text-nerv-muted hover:text-nerv-amber transition-colors"
-                >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="1" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
-                  COPY
-                </button>
-              )}
-            </div>
-            <div className="bg-nerv-bg border border-nerv-border px-2 py-1.5 text-nerv-text-dim text-[10px] break-all">
-              {hash || "\u2014"}
-            </div>
-          </div>
+          {/* I. Hash section */}
+          <HashSection hash={hash} />
         </div>
       ) : (
         <div className="text-nerv-muted text-center py-12">
@@ -1611,35 +1436,3 @@ const InspectorCard = memo(function InspectorCard({
     </div>
   );
 });
-
-/** Key-value metadata row — label left (muted), value right (bright). */
-const StatRow = memo(function StatRow({
-  label,
-  value,
-  valueClass,
-}: {
-  label: string;
-  value: string;
-  valueClass?: string;
-}) {
-  return (
-    <div className="flex items-center justify-between py-1 border-b border-nerv-border/40 last:border-b-0">
-      <span className="text-nerv-muted text-[10px]">{label}</span>
-      <span className={`text-nerv-text text-[10px] truncate ml-2 ${valueClass ?? ""}`}>{value}</span>
-    </div>
-  );
-});
-
-/** Derive the parent directory name from a full path. */
-function dirName(filePath: string): string {
-  const sep = filePath.includes("/") ? "/" : "\\";
-  const parts = filePath.split(sep).filter(Boolean);
-  return parts.length > 1 ? parts[parts.length - 2] : parts[0] ?? filePath;
-}
-
-/** Format WxH as a simplified aspect ratio (e.g. "3:2", "16:9"). */
-function aspectRatio(w: number, h: number): string {
-  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
-  const g = gcd(w, h);
-  return `${w / g}:${h / g}`;
-}

@@ -1,6 +1,16 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { MediaFile } from "../../scanner/types";
-import { formatBytes } from "../utils";
+import type { TagDef } from "../hooks/useTags";
+import { dirName, hasCameraData, plateId, type FileInsights } from "../inspectorUtils";
+import {
+  CameraSection,
+  ColorSpectrum,
+  FileDetails,
+  Hairline,
+  HashSection,
+  QuickActions,
+  TagManager,
+} from "./InspectorParts";
 
 /** Build a `media://` URL for the renderer. Mirrors the preload bridge so the
  * viewer works the same way as thumbnails. */
@@ -37,29 +47,31 @@ export interface MediaViewerProps {
   onMove?: (file: MediaFile) => void;
   /** Rename the current file. */
   onRename?: (file: MediaFile) => void;
-  /** Trash the current file. */
+  /** Queue the current file for trash (staged — no disk operation yet). */
   onTrash?: (file: MediaFile) => void;
+  /** Toggle favorite state for the current file (F key / star button). */
+  onToggleFavorite?: (file: MediaFile) => void;
+  /** Whether the current file is favorited (star rendering). */
+  isFavorite?: boolean;
+  /** Undo the last organizing action (Ctrl+Z). */
+  onUndo?: () => void;
+  /** Number of files currently staged in the trash queue. */
+  queuedCount?: number;
+  /** True while a dialog (move/rename) sits on top of the viewer — the
+   *  viewer surrenders keyboard control to it. */
+  modalOpen?: boolean;
+  /** Tag system props (shared TagManager — parity with split view). */
+  tags?: TagDef[];
+  fileTags?: TagDef[];
+  onToggleFileTag?: (filePath: string, tagKey: string) => void;
 }
-
-/** Format a date string (ISO or epoch) into a compact, readable form. */
-function formatDate(input: string | number | undefined): string {
-  if (!input) return "—";
-  const d = typeof input === "number" ? new Date(input) : new Date(input);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 
 // ─── zoom / pan helpers ──────────────────────────────────────────────
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 8;
 const ZOOM_STEP = 1.4;
+/** Right side panel width — wide enough for hash strings + EXIF labels. */
+const SIDE_PANEL_W = 264;
 
 function clampZoom(z: number): number {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
@@ -88,7 +100,7 @@ const FilmstripThumb: React.FC<FilmstripThumbProps> = memo(
         type="button"
         onClick={onClick}
         className={[
-          "relative h-14 w-14 flex-shrink-0 overflow-hidden border transition-[border-color,box-shadow,opacity] duration-150",
+          "relative h-10 w-10 flex-shrink-0 overflow-hidden border transition-[border-color,box-shadow,opacity] duration-150",
           active
             ? "border-nerv-orange shadow-[0_0_8px_rgba(255,152,48,0.4)] ring-1 ring-nerv-orange/40"
             : "border-nerv-border opacity-60 hover:opacity-100 hover:border-nerv-amber",
@@ -105,7 +117,7 @@ const FilmstripThumb: React.FC<FilmstripThumbProps> = memo(
         />
         {isVideo && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none">
-            <svg className="h-4 w-4 text-nerv-green drop-shadow" viewBox="0 0 24 24" fill="currentColor">
+            <svg className="h-3 w-3 text-nerv-green drop-shadow" viewBox="0 0 24 24" fill="currentColor">
               <path d="M8 5v14l11-7z" />
             </svg>
           </div>
@@ -119,45 +131,17 @@ const FilmstripThumb: React.FC<FilmstripThumbProps> = memo(
 );
 FilmstripThumb.displayName = "FilmstripThumb";
 
-// ─── metadata row ────────────────────────────────────────────────────
-function MetaItem({
-  label,
-  value,
-  tone = "default",
-}: {
-  label: string;
-  value: React.ReactNode;
-  tone?: "default" | "amber" | "cyan" | "green";
-}) {
-  const toneClass =
-    tone === "amber"
-      ? "text-nerv-amber"
-      : tone === "cyan"
-        ? "text-nerv-cyan"
-        : tone === "green"
-          ? "text-nerv-green"
-          : "text-nerv-text";
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[10px] uppercase tracking-widest text-nerv-muted">
-        {label}
-      </span>
-      <span className={`text-xs font-mono ${toneClass}`}>{value}</span>
-    </div>
-  );
-}
-
 // ─── main component ──────────────────────────────────────────────────
 /**
  * Fullscreen lightbox overlay for images and videos.
  *
  * - Filmstrip navigation (horizontal scrollable thumbnails)
  * - Full keyboard control with visible hints
- * - Rich metadata panel (size, date, path, type)
+ * - Right side panel (shared InspectorParts blocks — parity with split view)
  * - Cleaner composition, less visual noise
  */
 export const MediaViewer: React.FC<MediaViewerProps> = memo(
-  ({ file, files, index, onClose, onNavigate, onNavigateTo, onMove, onRename, onTrash }) => {
+  ({ file, files, index, onClose, onNavigate, onNavigateTo, onMove, onRename, onTrash, onToggleFavorite, isFavorite, onUndo, queuedCount, modalOpen, tags, fileTags, onToggleFileTag }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const mediaContainerRef = useRef<HTMLDivElement>(null);
     const filmstripRef = useRef<HTMLDivElement>(null);
@@ -231,9 +215,13 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
       }
     }, [currentIndex, files]);
 
-    // ── keyboard navigation ──
+    // ── keyboard control (ui-upgrade.md Issue 2A) ──
+    // A native window listener (not React's onKeyDown) so shortcuts work
+    // regardless of which element inside the viewer holds focus. Keys are
+    // surrendered while a modal dialog (move/rename) sits on top.
     const handleKeyDown = useCallback(
-      (e: React.KeyboardEvent) => {
+      (e: KeyboardEvent) => {
+        if (modalOpen) return;
         switch (e.key) {
           case "ArrowLeft":
             e.preventDefault();
@@ -281,10 +269,53 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             // let video element handle space for play/pause
             if (!isVideo) e.preventDefault();
             break;
+          case "Delete":
+          case "Backspace":
+            // queue-trash the current file; parent auto-advances
+            e.preventDefault();
+            onTrash?.(file);
+            break;
+          case "f":
+          case "F":
+            e.preventDefault();
+            onToggleFavorite?.(file);
+            break;
+          case "m":
+          case "M":
+            e.preventDefault();
+            onMove?.(file);
+            break;
+          case "F2":
+            // Shift+F2 renames — plain F2 stays the grid's rename-selected.
+            if (e.shiftKey) {
+              e.preventDefault();
+              onRename?.(file);
+            }
+            break;
+          case "r":
+          case "R":
+            // Ctrl+R renames (plain R is the global reload-failed-thumbs).
+            if (e.ctrlKey || e.metaKey) {
+              e.preventDefault();
+              onRename?.(file);
+            }
+            break;
+          case "z":
+          case "Z":
+            if (e.ctrlKey || e.metaKey) {
+              e.preventDefault();
+              onUndo?.();
+            }
+            break;
         }
       },
-      [hasPrev, hasNext, isVideo, onNavigate, onClose],
+      [modalOpen, hasPrev, hasNext, isVideo, onNavigate, onClose, onTrash, onToggleFavorite, onMove, onRename, onUndo, file],
     );
+
+    useEffect(() => {
+      window.addEventListener("keydown", handleKeyDown);
+      return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [handleKeyDown]);
 
     // ── zoom on wheel ──
     // Must be a native non-passive listener so preventDefault works;
@@ -410,6 +441,70 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
       }
     }, [currentIndex, files, isVideo]);
 
+    // ── file insights (side panel): palette + hash + EXIF camera ──
+    // Cached per file path; rapid filmstrip flipping never re-fetches an
+    // already-seen file, and a coalescing loop keeps at most one `file:insights`
+    // IPC in flight (stale wanted-paths are picked up by the next drain).
+    const insightsCacheRef = useRef<Map<string, FileInsights | null>>(new Map());
+    const [palette, setPalette] = useState<FileInsights["colors"] | null>(null);
+    const [hash, setHash] = useState("");
+    const [camera, setCamera] = useState<FileInsights["camera"] | undefined>(undefined);
+    const [insightsLoading, setInsightsLoading] = useState(false);
+    const wantedPathRef = useRef<string | null>(null);
+    const insightsFetchingRef = useRef(false);
+    const currentFilePathRef = useRef(file.filePath);
+
+    useEffect(() => {
+      currentFilePathRef.current = file.filePath;
+      setPalette(null);
+      setHash("");
+      setCamera(undefined);
+      setInsightsLoading(false);
+      // Don't spend main-process decodes on a hidden panel.
+      if (!showMetadata) {
+        wantedPathRef.current = null;
+        return;
+      }
+      const applyInsights = (insights: FileInsights | null) => {
+        setPalette(insights && insights.colors.length > 0 ? insights.colors : null);
+        setHash(insights?.hash ?? "");
+        setCamera(insights?.camera);
+      };
+      const cached = insightsCacheRef.current.get(file.filePath);
+      if (cached !== undefined) {
+        applyInsights(cached);
+        return;
+      }
+      wantedPathRef.current = file.filePath;
+      if (insightsFetchingRef.current) return; // in-flight drain will pick it up
+      insightsFetchingRef.current = true;
+      setInsightsLoading(true);
+      const drain = () => {
+        const path = wantedPathRef.current;
+        if (!path) {
+          insightsFetchingRef.current = false;
+          setInsightsLoading(false);
+          return;
+        }
+        wantedPathRef.current = null;
+        window.scanAPI
+          .getFileInsights(path)
+          .then((insights) => {
+            insightsCacheRef.current.set(path, insights);
+            if (currentFilePathRef.current === path) {
+              applyInsights(insights);
+              setInsightsLoading(false);
+            }
+            drain();
+          })
+          .catch(() => {
+            insightsCacheRef.current.set(path, null);
+            drain();
+          });
+      };
+      drain();
+    }, [file.filePath, showMetadata]);
+
     const cursorClass = isVideo
       ? ""
       : zoom > 1
@@ -421,7 +516,6 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
     return (
       <div
         className="fixed inset-0 z-50 flex flex-col bg-nerv-bg select-none animate-viewer-enter"
-        onKeyDown={handleKeyDown}
         tabIndex={-1}
       >
         {/* scanline overlay */}
@@ -459,38 +553,6 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
               {showMetadata ? "Hide Info" : "Show Info"}
             </button>
 
-            {/* file operations */}
-            {onMove && (
-              <button
-                type="button"
-                onClick={() => onMove(file)}
-                className="border border-nerv-lime/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-lime transition-colors hover:bg-nerv-lime/10 hover:border-nerv-lime/80"
-              >
-                ⇥ Move
-              </button>
-            )}
-            {onRename && (
-              <button
-                type="button"
-                onClick={() => onRename(file)}
-                className="border border-nerv-cyan/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-cyan transition-colors hover:bg-nerv-cyan/10 hover:border-nerv-cyan/80"
-              >
-                ✎ Rename
-              </button>
-            )}
-            {onTrash && (
-              <button
-                type="button"
-                onClick={() => {
-                  onTrash(file);
-                  onClose();
-                }}
-                className="border border-nerv-red/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-red transition-colors hover:bg-nerv-red/10 hover:border-nerv-red/80"
-              >
-                ⌫ Trash
-              </button>
-            )}
-
             {/* close */}
             <button
               type="button"
@@ -502,14 +564,16 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
           </div>
         </div>
 
-        {/* ── media stage ── */}
-        <div
-          ref={mediaContainerRef}
-          className="relative z-20 flex flex-1 items-center justify-center overflow-hidden"
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-        >
+        {/* ── main row: media stage + right side panel ── */}
+        <div className="flex flex-1 min-h-0">
+          {/* ── media stage (expands into panel's space when hidden) ── */}
+          <div
+            ref={mediaContainerRef}
+            className="relative z-20 flex flex-1 min-w-0 items-center justify-center overflow-hidden"
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+          >
           {/* prev arrow */}
           {hasPrev && (
             <button
@@ -606,48 +670,144 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
               {!isVideo && <Divider />}
               <Hint keys="I" label="Info" />
               <Divider />
+              <Hint keys="Del" label="Queue Trash" />
+              <Divider />
               <Hint keys="Esc" label="Close" />
             </div>
           )}
-        </div>
+          </div>
 
-        {/* ── metadata panel (collapsible) ── */}
-        {showMetadata && (
-          <div className="relative z-20 flex items-stretch border-t border-nerv-orange/20 bg-nerv-panel/90">
-            <div className="flex flex-1 flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2.5">
-              <MetaItem
-                label="File"
-                value={
-                  <span className="font-bold text-nerv-orange">
+          {/* ── right side panel (slide/fade, expands image when hidden) ── */}
+          <div
+            className={`relative z-20 flex-shrink-0 overflow-hidden border-l border-nerv-orange/20 bg-nerv-panel/90 transition-[width,opacity] duration-200 ease-out no-drag ${
+              showMetadata ? "opacity-100" : "opacity-0 pointer-events-none"
+            }`}
+            style={{ width: showMetadata ? SIDE_PANEL_W : 0 }}
+          >
+            {/* Fixed-width content — the wrapper animates, the content never
+                reflows (no layout thrash during the slide). */}
+            <div
+              className="flex h-full flex-col overflow-y-auto"
+              style={{ width: SIDE_PANEL_W, scrollbarWidth: "thin" }}
+            >
+              {/* 1. FILE — name + reveal-in-folder + path + ID/type badges */}
+              <section className="px-4 py-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-[9px] font-mono uppercase tracking-widest text-nerv-muted">
+                    FILE
+                  </span>
+                  <span className="flex gap-1">
+                    <span className="tag-chip eva-cut bg-nerv-orange px-1.5 py-0.5 text-[8px] font-bold tracking-wider text-black">
+                      {plateId(file.filePath)}
+                    </span>
+                    <span
+                      className={`tag-chip eva-cut px-1.5 py-0.5 text-[8px] font-bold tracking-wider text-black ${
+                        isVideo ? "bg-nerv-green" : "bg-nerv-cyan"
+                      }`}
+                    >
+                      {isVideo ? "VID" : "IMG"}
+                    </span>
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-2">
+                  <span className="break-all font-mono text-[11px] font-bold leading-snug text-nerv-orange">
                     {file.fileName}
                   </span>
-                }
-              />
-              <MetaItem
-                label="Type"
-                value={isVideo ? "VIDEO" : "IMAGE"}
-                tone={isVideo ? "green" : "cyan"}
-              />
-              <MetaItem
-                label="Size"
-                value={formatBytes(file.sizeBytes)}
-                tone="cyan"
-              />
-              <MetaItem
-                label="Created"
-                value={formatDate(file.birthtime)}
-                tone="amber"
-              />
+                  <button
+                    type="button"
+                    onClick={() => void window.scanAPI.showItemInFolder(file.filePath)}
+                    title="Reveal in folder"
+                    aria-label="Reveal in folder"
+                    className="shrink-0 text-nerv-muted transition-colors hover:text-nerv-amber"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 3h6v6M10 14L21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" /></svg>
+                  </button>
+                </div>
+                <div className="mt-1 flex items-center gap-1 text-[10px] text-nerv-muted">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0 text-nerv-orange/70"><path d="M3 7a2 2 0 0 1 2-2h3l2 2h4a2 2 0 0 1 2 2v1" /><rect x="3" y="9" width="18" height="11" /></svg>
+                  <span className="truncate">{dirName(file.filePath)}</span>
+                </div>
+              </section>
+              <Hairline />
+
+              {/* 2. TAGS — shared TagManager (same as split view) */}
+              {tags && onToggleFileTag && (
+                <>
+                  <section className="px-4 py-3">
+                    <TagManager
+                      tags={tags}
+                      fileTags={fileTags ?? []}
+                      filePath={file.filePath}
+                      onToggleFileTag={onToggleFileTag}
+                    />
+                  </section>
+                  <Hairline />
+                </>
+              )}
+
+              {/* 3. QUICK ACTIONS — shared 2x2 grid */}
+              <section className="px-4 py-3">
+                <div className="mb-2 text-[9px] font-mono uppercase tracking-widest text-nerv-muted">
+                  QUICK ACTIONS
+                </div>
+                <QuickActions
+                  file={file}
+                  isFavorite={isFavorite ?? false}
+                  onToggleFavorite={onToggleFavorite}
+                  onMove={onMove}
+                  onRename={onRename}
+                  onTrash={onTrash}
+                />
+              </section>
+              <Hairline />
+
+              {/* 4. FILE DETAILS — merged basic + resolution stats */}
+              <section className="px-4 py-3">
+                <div className="mb-2 text-[9px] font-mono uppercase tracking-widest text-nerv-muted">
+                  FILE DETAILS
+                </div>
+                <FileDetails file={file} />
+              </section>
+              <Hairline />
+
+              {/* 5. COLOR SPECTRUM — shared gradient + labeled swatches */}
+              <section className="px-4 py-3">
+                <ColorSpectrum colors={palette} loading={insightsLoading} />
+              </section>
+
+              {/* 6. CAMERA — omitted entirely when no EXIF data */}
+              {hasCameraData(camera) && (
+                <>
+                  <Hairline />
+                  <section className="px-4 py-3">
+                    <CameraSection camera={camera} />
+                  </section>
+                </>
+              )}
+
+              {/* 7. HASH — value + copy */}
+              <Hairline />
+              <section className="px-4 py-3">
+                <HashSection hash={hash} />
+              </section>
+
+              <div className="mt-auto px-4 py-2">
+                {queuedCount !== undefined && queuedCount > 0 && (
+                  <span className="font-mono text-[8px] font-bold tracking-wider text-nerv-red">
+                    {queuedCount} STAGED FOR TRASH
+                  </span>
+                )}
+              </div>
             </div>
           </div>
-        )}
+        </div>
 
-        {/* ── filmstrip (windowed — only render thumbs near current index) ── */}
+        {/* ── filmstrip (windowed, thin dock — full width under image + panel) ── */}
         {totalCount > 1 && (
-          <div className="relative z-20 border-t border-nerv-orange/20 bg-nerv-panel/40">
+          <div className="relative z-20 flex-shrink-0 border-t border-nerv-orange/20 bg-nerv-panel/60">
             <div
               ref={filmstripRef}
-              className="flex items-center gap-1.5 overflow-x-auto px-3 py-2"
+              className="flex items-center gap-1.5 overflow-x-auto px-3 py-1"
               style={{ scrollbarWidth: "thin" }}
             >
               {(() => {
@@ -655,6 +815,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                 // Window of ±50 around current index to avoid decoding
                 // thousands of full-res images at once.
                 const WIN = 50;
+                const THUMB_STEP = 40 + 6; // thumb 40px + gap 6px
                 const start = Math.max(0, currentIndex - WIN);
                 const end = Math.min(totalCount, currentIndex + WIN + 1);
 
@@ -663,7 +824,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                   thumbs.push(
                     <div
                       key="spacer-lead"
-                      style={{ width: `${start * (56 + 6)}px`, flexShrink: 0 }}
+                      style={{ width: `${start * THUMB_STEP}px`, flexShrink: 0 }}
                     />,
                   );
                 }
@@ -687,10 +848,10 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                     <div
                       key="spacer-trail"
                       style={{
-                        width: `${(totalCount - end) * (56 + 6)}px`,
+                        width: `${(totalCount - end) * THUMB_STEP}px`,
                         flexShrink: 0,
                       }}
-                    />
+                    />,
                   );
                 }
 

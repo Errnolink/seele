@@ -7,6 +7,10 @@ export interface ActivityEntry {
   detail: string;
   ok: boolean;
   timestamp: number;
+  /** Absolute path before the operation (move/rename) — powers revert. */
+  fromPath?: string;
+  /** Absolute path after the operation (move/rename) — powers revert. */
+  toPath?: string;
 }
 
 export interface ActivityLogProps {

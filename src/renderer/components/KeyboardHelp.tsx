@@ -23,6 +23,25 @@ const SHORTCUTS: { section: string; entries: ShortcutEntry[] }[] = [
       { keys: ["?"], label: "Toggle this help" },
     ],
   },
+  {
+    section: "Grid selection",
+    entries: [
+      { keys: ["Delete"], label: "Queue selected for trash (staged — not deleted)" },
+      { keys: ["M"], label: "Move selected files" },
+      { keys: ["F2"], label: "Rename single selected file" },
+    ],
+  },
+  {
+    section: "Viewer organizing",
+    entries: [
+      { keys: ["Del/⌫"], label: "Queue current file for trash + advance" },
+      { keys: ["F"], label: "Toggle favorite" },
+      { keys: ["M"], label: "Move current file" },
+      { keys: ["Shift", "F2"], label: "Rename current file" },
+      { keys: ["Ctrl", "R"], label: "Rename current file" },
+      { keys: ["Ctrl", "Z"], label: "Undo last action (revert move/rename, restore staged trash)" },
+    ],
+  },
 ];
 
 interface KeyboardHelpProps {
