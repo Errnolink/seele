@@ -4,3 +4,4 @@ dist-electron/
 *.tsbuildinfo
 .vite/
 .DS_Store
+/AGENT_MEMORY.md
