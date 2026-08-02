@@ -990,6 +990,9 @@ export default function App() {
           onAddTag={tagSystem.addTag}
           onRemoveTag={tagSystem.removeTag}
           onToggleActiveTag={tagSystem.toggleActiveTag}
+          onFolderContextMenu={(folderPath, x, y) =>
+            setFolderContextMenu({ folderPath, x, y })
+          }
         />
 
         {/* Main content */}

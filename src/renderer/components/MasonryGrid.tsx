@@ -1361,6 +1361,8 @@ const InspectorCard = memo(function InspectorCard({
     setLoading(true);
     void window.scanAPI.getFileInsights(file.filePath).then((data) => {
       if (!cancelled) { setInsights(data); setLoading(false); }
+    }).catch(() => {
+      if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
   }, [file]);

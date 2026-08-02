@@ -38,6 +38,8 @@ export interface SidebarProps {
   onAddTag?: (label: string, category?: TagDef["category"]) => string;
   onRemoveTag?: (key: string) => void;
   onToggleActiveTag?: (key: string) => void;
+  /** Right-click on a folder row — opens the App-level folder context menu. */
+  onFolderContextMenu?: (folderPath: string, x: number, y: number) => void;
 }
 /** A quick-view filter button definition. */
 interface QuickView {
@@ -162,6 +164,8 @@ interface FolderTreeNodeProps {
   hiddenFolders?: Set<string>;
   /** Root tree total size (bytes) for computing capacity percentages. */
   rootSize?: number;
+  /** Right-click on this row — opens the App-level folder context menu. */
+  onFolderContextMenu?: (folderPath: string, x: number, y: number) => void;
 }
 
 /** Recursive folder row. The ALL FILES clearFolder action lives above; rows
@@ -178,6 +182,7 @@ const FolderTreeNode = memo(function FolderTreeNode({
   selectedIds,
   hiddenFolders,
   rootSize,
+  onFolderContextMenu,
 }: FolderTreeNodeProps) {
   const hasChildren = node.children.length > 0;
   const isOpen = expanded.has(node.path);
@@ -199,6 +204,11 @@ const FolderTreeNode = memo(function FolderTreeNode({
             e.stopPropagation();
             onToggleExpand(node.path);
           }
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onFolderContextMenu?.(node.path, e.clientX, e.clientY);
         }}
         onDragOver={(e) => {
           if (onDropFiles && selectedIds && selectedIds.size > 0) {
@@ -295,6 +305,7 @@ const FolderTreeNode = memo(function FolderTreeNode({
               selectedIds={selectedIds}
               hiddenFolders={hiddenFolders}
               rootSize={rootSize}
+              onFolderContextMenu={onFolderContextMenu}
             />
           ))}
         </div>
@@ -315,6 +326,8 @@ interface DirectoryExplorerProps {
   onDropFiles?: (filePaths: string[], destDir: string) => void;
   selectedIds?: Set<string>;
   hiddenFolders?: Set<string>;
+  /** Right-click on a folder row — opens the App-level folder context menu. */
+  onFolderContextMenu?: (folderPath: string, x: number, y: number) => void;
 }
 
 const DirectoryExplorer = memo(function DirectoryExplorer({
@@ -327,6 +340,7 @@ const DirectoryExplorer = memo(function DirectoryExplorer({
   onDropFiles,
   selectedIds,
   hiddenFolders,
+  onFolderContextMenu,
 }: DirectoryExplorerProps) {
   const [filterRaw, setFilterRaw] = useState("");
   // Keep typing responsive; defer the (potentially deep) subtree filter.
@@ -466,6 +480,7 @@ const DirectoryExplorer = memo(function DirectoryExplorer({
             selectedIds={selectedIds}
             hiddenFolders={hiddenFolders}
             rootSize={visible.tree.size}
+            onFolderContextMenu={onFolderContextMenu}
           />
         ) : (
           <div className="text-[10px] font-mono text-nerv-muted px-1 py-2">
@@ -731,6 +746,7 @@ function SidebarInner({
   onAddTag,
   onRemoveTag,
   onToggleActiveTag,
+  onFolderContextMenu,
 }: SidebarProps) {
   // Folder expansion state is LOCAL to the sidebar.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -761,6 +777,7 @@ function SidebarInner({
           setExpanded={setExpanded}
           onDropFiles={onDropFiles}
           selectedIds={selectedIds}
+          onFolderContextMenu={onFolderContextMenu}
         />
 
         {/* Classification Tags — v2.5 §Module 3.3 */}

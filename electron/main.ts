@@ -159,18 +159,27 @@ function messageStringField(msg: unknown, field: string): string | undefined {
 }
 
 /** Two-tier thumbnail cache: in-memory LRU (hot) + on-disk JPEGs (cold).
- *  The disk tier lives under app.getPath("cache") so the OS manages
- *  cleanup (Windows Storage Sense / Disk Cleanup clears it automatically —
-  *  the user never has to hunt it down). Surviving across restarts means
-  *  ffmpeg/sharp never re-extract a thumbnail that's already on disk.
+ *  The disk tier lives under app.getPath("cache") so the OS can reclaim it,
+ *  but OS cleanup (Windows Storage Sense / Disk Cleanup) is opt-in and
+ *  unreliable — the app enforces its own oldest-first eviction on the disk
+ *  tier instead (pruneThumbCache). Surviving across restarts means
+ *  ffmpeg/sharp never re-extract a thumbnail that's already on disk.
  *  Keyed on a content-derived hash of the cache key string. */
 const thumbCache = new Map<string, Uint8Array>();
 const THUMB_CACHE_MAX = 150;
+/** Disk-tier budget: cap both the file count and the total bytes so a large
+ *  library cannot grow the cold cache without bound. */
+const THUMB_DISK_MAX_FILES = 5000;
+const THUMB_DISK_MAX_BYTES = 512 * 1024 * 1024;
+/** Don't scan the whole cache dir more often than this — a prune pass on
+ *  every store would thrash the disk on cold-cache bursts. */
+const THUMB_PRUNE_MIN_INTERVAL_MS = 60_000;
+let lastThumbPruneAt = 0;
 
 /** Resolve the on-disk cache directory. Lazily created on first use.
- *  On Windows this targets %LOCALAPPDATA%/<app>/Cache — the exact folder
- *  Windows Storage Sense / Disk Cleanup reclaims automatically, so the
- *  user never has to hunt it down. On macOS/Linux, userData/thumbs. */
+ *  On Windows this targets %LOCALAPPDATA%/<app>/Cache — the same folder
+ *  Windows Storage Sense / Disk Cleanup reclaims, but the app also prunes
+ *  it itself (pruneThumbCache). On macOS/Linux, userData/thumbs. */
 let thumbDir = "";
 function getThumbDir(): string {
   if (!thumbDir) {
@@ -212,6 +221,42 @@ function thumbDiskPath(cacheKey: string): string {
   return path.join(getThumbDir(), hash.slice(0, 2), hash);
 }
 
+/** Enforce the disk-tier budget: walk the shard dirs, then evict oldest
+ *  files (by mtime) until both the file-count and byte caps are satisfied.
+ *  Throttled to once a minute and best-effort — a slow disk or a full
+ *  backlog must never block thumbnail serving. */
+async function pruneThumbCache(): Promise<void> {
+  const now = Date.now();
+  if (now - lastThumbPruneAt < THUMB_PRUNE_MIN_INTERVAL_MS) return;
+  lastThumbPruneAt = now;
+  try {
+    const root = getThumbDir();
+    const entries: Array<{ p: string; size: number; mtime: number }> = [];
+    for (const shard of await fs.promises.readdir(root, { withFileTypes: true })) {
+      if (!shard.isDirectory()) continue;
+      const shardPath = path.join(root, shard.name);
+      for (const f of await fs.promises.readdir(shardPath, { withFileTypes: true })) {
+        if (!f.isFile()) continue;
+        const st = await fs.promises.stat(path.join(shardPath, f.name)).catch(() => null);
+        if (st) entries.push({ p: path.join(shardPath, f.name), size: st.size, mtime: st.mtimeMs });
+      }
+    }
+    let totalBytes = entries.reduce((s, e) => s + e.size, 0);
+    if (entries.length <= THUMB_DISK_MAX_FILES && totalBytes <= THUMB_DISK_MAX_BYTES) return;
+    entries.sort((a, b) => a.mtime - b.mtime);
+    let evicted = 0;
+    for (const e of entries) {
+      if (entries.length - evicted <= THUMB_DISK_MAX_FILES && totalBytes <= THUMB_DISK_MAX_BYTES) break;
+      await fs.promises.unlink(e.p).catch(() => {});
+      totalBytes -= e.size;
+      evicted++;
+    }
+    if (evicted > 0 && !app.isPackaged) {
+      console.debug(`[media] thumb disk prune: evicted ${evicted} files`);
+    }
+  } catch { /* best-effort */ }
+}
+
 /** Store a thumbnail in both tiers (RAM LRU + disk) and run eviction.
  *  The disk write is async + best-effort — a failure just means the next
  *  request re-extracts; it never blocks serving the response or the main
@@ -229,6 +274,7 @@ function storeThumb(cacheKey: string, bytes: Uint8Array): void {
     .catch((e) => {
       if (!app.isPackaged) console.debug("[media] thumb disk write failed:", e);
     });
+  void pruneThumbCache();
 }
 
 /** Look up a thumbnail across both tiers. On a RAM miss, checks disk and
@@ -474,6 +520,9 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  // Bring the disk tier back under budget at startup — the cheapest moment
+  // to pay the walk cost, and it catches whatever grew since last launch.
+  void pruneThumbCache();
 });
 
 /** Build a `file://` URL from an absolute native path.
@@ -833,6 +882,51 @@ async function decodeBufferForInsights(
   }
 }
 
+/** Median-cut quantization: repeatedly split the largest-range bucket until `target`
+ *  buckets remain; each bucket's mean becomes a palette color. Buckets are returned
+ *  sorted by population (most prominent first). */
+function medianCutPalette(
+  pixels: Uint8Array,
+  count: number,
+  target: number,
+): Array<{ r: number; g: number; b: number }> {
+  const buckets: number[][] = [Array.from({ length: count }, (_, i) => i)];
+  while (buckets.length < target) {
+    let bestB = -1;
+    let bestRange = -1;
+    let bestChannel = 0;
+    for (let b = 0; b < buckets.length; b++) {
+      const arr = buckets[b];
+      if (arr.length < 2) continue;
+      let minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
+      for (const i of arr) {
+        const r = pixels[i * 3], g = pixels[i * 3 + 1], bl = pixels[i * 3 + 2];
+        if (r < minR) minR = r; if (r > maxR) maxR = r;
+        if (g < minG) minG = g; if (g > maxG) maxG = g;
+        if (bl < minB) minB = bl; if (bl > maxB) maxB = bl;
+      }
+      const rangeR = maxR - minR, rangeG = maxG - minG, rangeB = maxB - minB;
+      let range = rangeR, channel = 0;
+      if (rangeG > range) { range = rangeG; channel = 1; }
+      if (rangeB > range) { range = rangeB; channel = 2; }
+      if (range > bestRange) { bestRange = range; bestB = b; bestChannel = channel; }
+    }
+    if (bestB === -1) break;
+    const arr = buckets[bestB];
+    arr.sort((a, b2) => pixels[a * 3 + bestChannel] - pixels[b2 * 3 + bestChannel]);
+    const mid = arr.length >> 1;
+    buckets.splice(bestB, 1, arr.slice(0, mid), arr.slice(mid));
+  }
+  return buckets
+    .sort((a, b2) => b2.length - a.length)
+    .map((arr) => {
+      let r = 0, g = 0, b = 0;
+      for (const i of arr) { r += pixels[i * 3]; g += pixels[i * 3 + 1]; b += pixels[i * 3 + 2]; }
+      const n = arr.length || 1;
+      return { r: r / n, g: g / n, b: b / n };
+    });
+}
+
 ipcMain.handle("file:insights", async (_e, filePath: string): Promise<FileInsights | null> => {
   if (typeof filePath !== "string" || filePath.length === 0) return null;
   if (!isUnderAllowedRoot(path.resolve(filePath))) return null;
@@ -867,27 +961,30 @@ ipcMain.handle("file:insights", async (_e, filePath: string): Promise<FileInsigh
       const { buf, meta } = decoded;
       const toHex = (r: number, g: number, b: number) =>
         `#${[r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
-      // Whole-image dominant swatch — independent try so one failure doesn't
-      // poison the whole palette.
+      // Median-cut palette over a tiny preview. sharp's stats().dominant is a
+      // histogram-weighted mean — on a light photo every region averages out to
+      // the same pale cream, so a real spectrum needs quantization. 48x48 raw
+      // pixels (from the 320px preview buffer) carry plenty of hue detail.
       try {
-        const d = (await sharp(buf).stats()).dominant;
-        colors.push({ r: d.r, g: d.g, b: d.b, hex: toHex(d.r, d.g, d.b) });
-      } catch { /* best-effort */ }
-      // 3 quadrant swatches.
-      const w = meta.width ?? 100, h = meta.height ?? 100;
-      const quads = [
-        { left: 0, top: 0, width: Math.floor(w / 2), height: Math.floor(h / 2) },
-        { left: Math.ceil(w / 2), top: 0, width: Math.floor(w / 2), height: Math.floor(h / 2) },
-        { left: 0, top: Math.ceil(h / 2), width: Math.floor(w / 2), height: Math.floor(h / 2) },
-      ];
-      const quadResults = await Promise.allSettled(
-        quads.map((q) => withSharpLimit(() => sharp(buf).extract(q).stats())),
-      );
-      for (const r of quadResults) {
-        if (r.status === "fulfilled") {
-          const dd = r.value.dominant;
-          colors.push({ r: dd.r, g: dd.g, b: dd.b, hex: toHex(dd.r, dd.g, dd.b) });
+        const raw = await withSharpLimit(() =>
+          sharp(buf)
+            .resize({ width: 48, height: 48, fit: "inside" })
+            .removeAlpha()
+            .flatten({ background: "#000000" })
+            .raw()
+            .toBuffer({ resolveWithObject: true }),
+        );
+        const pal = medianCutPalette(raw.data, raw.info.width * raw.info.height, 4);
+        for (const c of pal) {
+          const rr = Math.round(c.r), gg = Math.round(c.g), bb = Math.round(c.b);
+          colors.push({ r: rr, g: gg, b: bb, hex: toHex(rr, gg, bb) });
         }
+      } catch {
+        // Fallback: whole-image dominant swatch.
+        try {
+          const d = (await sharp(buf).stats()).dominant;
+          colors.push({ r: d.r, g: d.g, b: d.b, hex: toHex(d.r, d.g, d.b) });
+        } catch { /* best-effort */ }
       }
       Object.assign(cam, parseExif(meta.exif));
     }
