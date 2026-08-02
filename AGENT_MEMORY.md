@@ -29,6 +29,12 @@ This rule exists because prior work on this project produced a review summary th
 - Scan runs in a worker (`electron/scanWorker.ts`); progress coalesced in `useScanState` (150ms last-write-wins); `media-cache.json` persisted under userData (`AppData\Roaming\seele`).
 - Context menus: sidebar tree rows get `onFolderContextMenu` threaded Sidebar → DirectoryExplorer → FolderTreeNode (preventDefault + stopPropagation; row span `flex-1 truncate` had none before — fixed in 2b88982). Folder-view cards use FolderBrowser → App `folderContextMenu`.
 
+## Session Continuity (start of new session)
+- Repo: branch `v2.5.1`, clean tree, in sync with `origin/v2.5.1` (last push: `6e756b5`).
+- The dev app MAY still be running from a previous session: check `Get-CimInstance Win32_Process` for `electron.exe` and `node.exe` with "Wiergise" in CommandLine, and `Get-NetTCPConnection -LocalPort 5173` before relaunching. If running, HMR/tsc-watch are live; main-process changes still need an electron-only restart. Log: `%TEMP%\opencode\seele-dev3.log`.
+- New issue/feature lists arrive as markdown files (e.g. `*.md` at repo root). Read them, then VERIFY each claim against the code before fixing (Operating Rule above).
+- Verification commands: `npm run typecheck:renderer`, `npm run typecheck:electron`, `npm run lint`, `npm test` (35 tests), `npm run build`.
+
 ## Recent v2.5.1 Commits
 - `0ade0e2` perf: windowed masonry rendering (O(visible) via binary-search columns + arithmetic rows), async thumbnail cache I/O, render-path optimizations (memoization, deferred folder tree, batch favorite updates, progress coalescing).
 - `8f48ca5` chore: rename Wiergise → seele.
