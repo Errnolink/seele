@@ -31,10 +31,27 @@ This rule exists because prior work on this project produced a review summary th
 - Context menus: sidebar tree rows get `onFolderContextMenu` threaded Sidebar → DirectoryExplorer → FolderTreeNode (preventDefault + stopPropagation; row span `flex-1 truncate` had none before — fixed in 2b88982). Folder-view cards use FolderBrowser → App `folderContextMenu`.
 
 ## Session Continuity (start of new session)
-- Repo: branch `v2.5.1`, clean tree, in sync with `origin/v2.5.1` (last push: `e7633fb`).
-- The dev app MAY still be running from a previous session: check `Get-CimInstance Win32_Process` for `electron.exe` and `node.exe` with "Wiergise" in CommandLine, and `Get-NetTCPConnection -LocalPort 5173` before relaunching. If running, HMR/tsc-watch are live; main-process changes still need an electron-only restart. Log: `%TEMP%\opencode\seele-dev3.log`.
+- Repo: branch `v2.5.2` (created from `v2.5.1`; **nothing committed yet** — all v2.5.2 work is uncommitted in the working tree).
+- The dev app MAY still be running from a previous session: check `Get-CimInstance Win32_Process` for `electron.exe` and `node.exe` with "Wiergise" in CommandLine, and `Get-NetTCPConnection -LocalPort 5173` before relaunching. If running, HMR/tsc-watch are live; main-process changes still need an electron-only restart. Log: `%TEMP%\opencode\seele-dev3.log` (v2.5.2 sessions used `seele-dev-v252.log`).
+- **DO NOT blanket-kill recent `node`/`cmd` processes to stop electron** — it kills the vite dev server too, causing `ERR_CONNECTION_REFUSED` + white screen. Kill only `electron.exe` processes; relaunch `npm run dev` (concurrently starts vite + tsc --watch + electron) via `Start-Process` with `ELECTRON_ENABLE_LOGGING=1` and redirected logs.
 - New issue/feature lists arrive as markdown files (e.g. `*.md` at repo root). Read them, then VERIFY each claim against the code before fixing (Operating Rule above).
 - Verification commands: `npm run typecheck:renderer`, `npm run typecheck:electron`, `npm run lint`, `npm test` (35 tests), `npm run build`.
+
+## v2.5.2 Work (in progress — NOT COMMITTED, branch v2.5.2)
+Spec: `ui-upgrade.md` (fully implemented) + MediaViewer layout rework. Pending user "commit" confirmation before committing; commit style `feat(v2.5.2): ...`.
+
+### Implemented (ui-upgrade.md + layout rework)
+- **Trash queue (staged, session-only)**: `queueForTrash`/`restoreFromQueue`/`deleteFromQueue`/`emptyTrashQueue` in App.tsx; `TrashQueueModal.tsx` (restore / delete-forever / two-stage empty confirm); `useScanState` gained `addFiles` action + `onAddFiles`; `ActivityEntry` gained `fromPath`/`toPath` (ActivityLog.tsx). No `shell.trashItem` until "Delete Forever"/"Empty Queue". REVERT in SessionChangesModal only for `move`/`rename`.
+- **Viewer keyboard (MediaViewer)**: native window listener; Del/Backspace → queue+advance; F favorite; M move; Shift+F2/Ctrl+R rename; Ctrl+Z undo; viewer surrenders when `modalOpen` (move/rename dialogs or trash queue). App-level keydown gate: `if (viewerIndexRef.current !== null) return;` (after `inEditable` check). **Plain R stays "reload failed thumbnails" (App.tsx global); plain F2 stays grid rename-selected.** `advanceViewer` runs BEFORE `onRemoveFiles` (reads `derivedFilesRef`); `handleTrashSelected` uses `derivedFilesRef.current` (TDZ fix — never reference `derivedFiles` before its declaration). KeyboardHelp legend updated.
+- **Auto-advance** in viewer; **persistent controls** (were inside slide-in panel, now moved into new side panel).
+- **MediaViewer layout rework**: media stage wrapped in `flex flex-1 min-h-0` main row; old bottom metadata panel + action bar REPLACED by a right side panel (`SIDE_PANEL_W = 248`, transition width+opacity, `pointer-events-none` when closed, inner content fixed at SIDE_PANEL_W so no reflow). Sections: 1. FILE (MetaItem label-value rows — label above value), 2. PALETTE (6-swatch strip; ANALYZING pulse / UNAVAILABLE states), 3. QUICK ACTIONS (`ActionRow` rows: Favorite amber ★/☆, Move lime ⇥, Rename cyan ✎, Trash red ⌫; icon+label left, key hint kbd right; tone colors via ACTION_TONES map). Local helpers: `Hairline` (h-px bg-nerv-border/40), `ActionRow` (color prop amber|lime|cyan|red). Footer: `{queuedCount} STAGED FOR TRASH`. Top bar: logo + page counter + FIT + "Hide Info" toggle (showMetadata) + Close — inline filename/metadata removed from top bar.
+- **Filmstrip**: thumb `h-14 w-14` → `h-10 w-10` (60→40px); container restyled to thin dock `py-1` (was `py-2`), still full width under image+panel, horizontal scroll; spacer step `40 + 6` (was `56 + 6`); amber active border + bottom accent kept.
+- **Palette**: `medianCutPalette` 4 → 6 colors (electron/main.ts — visual target 5–6 swatches; main-process change, needed electron restart). Renderer: `paletteCacheRef` Map<path, Swatch[]|null>, coalescing drain loop (`paletteFetchingRef` + `wantedPalettePathRef`), `currentFilePathRef` guard, gated on `showMetadata`; fetch via `window.scanAPI.getFileInsights`. **Palette swatch keys MUST be `${hex}-${i}` (index-suffixed)** — median cut can return duplicate hexes (#000000) → duplicate React key warning at MediaViewer.tsx:754 (fixed).
+- Verified: typecheck renderer+electron, lint, 35 tests, build — all green. White screen incident: caused by killing vite, not code.
+
+### Pending / Caveats
+- Commit of all v2.5.2 work (approved by user, not yet executed).
+- Watch for: duplicate React keys from derived hex colors; `npm run dev` full relaunch if vite dies.
 
 ## Recent v2.5.1 Commits
 - `bda3cf9` feat: settings page (Performance Mode / Reduce Motion / Dialog Blur / Decode Concurrency / Scroll Buffer), settings.json persistence + settings:get/set IPC, live sharp/ffmpeg semaphore resizing, settings-driven masonry overscan, scoped transitions (no transition-all left), reduced-motion shimmer + OS prefers-reduced-motion.
