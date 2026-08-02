@@ -41,7 +41,9 @@ type ScanAction =
   | { type: "error"; message: string }
   | { type: "cancelled" }
   | { type: "restore"; files: MediaFile[] }
-  | { type: "metaBatch"; patches: MetaPatch[] };
+  | { type: "metaBatch"; patches: MetaPatch[] }
+  | { type: "removeFiles"; filePaths: Set<string> }
+  | { type: "addFiles"; files: MediaFile[] };
 
 const initialState: ScanState = {
   batches: [],
@@ -104,6 +106,10 @@ function scanReducer(state: ScanState, action: ScanAction): ScanState {
             birthtimeMs: patch.birthtimeMs,
             birthtime: patch.birthtime,
             dateKey: patch.dateKey,
+            // Dimensions may be absent (video or unreadable header); only
+            // overwrite when the probe produced a real value.
+            width: patch.width ?? file.width,
+            height: patch.height ?? file.height,
           };
         });
         if (!rewrote) return batch;
@@ -125,8 +131,49 @@ function scanReducer(state: ScanState, action: ScanAction): ScanState {
       return { ...state, status: "done", progress: null };
     case "error":
       return { ...state, status: "error", error: action.message, progress: null };
+    case "removeFiles": {
+      // After a move/trash, purge the affected files from every batch.
+      // Each batch array is filtered in place; empty batches are dropped.
+      const remove = action.filePaths;
+      let changed = false;
+      const nextBatches: MediaFile[][] = [];
+      let actualRemoved = 0;
+      for (const batch of state.batches) {
+        const filtered = batch.filter((f) => {
+          if (remove.has(f.filePath)) {
+            actualRemoved++;
+            return false;
+          }
+          return true;
+        });
+        if (filtered.length !== batch.length) {
+          changed = true;
+          if (filtered.length > 0) nextBatches.push(filtered);
+        } else {
+          nextBatches.push(batch);
+        }
+      }
+      if (!changed) return state;
+      return {
+        ...state,
+        batches: nextBatches,
+        filesVersion: state.filesVersion + 1,
+        count: Math.max(0, state.count - actualRemoved),
+      };
+    }
     case "cancelled":
       return { ...state, status: "cancelled", progress: null };
+    case "addFiles": {
+      // Re-add files after a trash-queue restore or rename (no rescan —
+      // the file was never removed from disk, only from local state).
+      if (action.files.length === 0) return state;
+      return {
+        ...state,
+        batches: [...state.batches, action.files],
+        filesVersion: state.filesVersion + 1,
+        count: state.count + action.files.length,
+      };
+    }
     default: {
       const _exhaustive: never = action;
       return _exhaustive;
@@ -160,6 +207,10 @@ export interface UseScanStateReturn {
   onRestore: (files: MediaFile[]) => void;
   /** Apply phase-2 metadata patches to placeholder files in place. */
   onMetaBatch: (patches: MetaPatch[]) => void;
+  /** Remove files from local state after move/trash operations. */
+  onRemoveFiles: (filePaths: Set<string>) => void;
+  /** Re-add files to local state (trash-queue restore / rename). */
+  onAddFiles: (files: MediaFile[]) => void;
 }
 
 /**
@@ -169,11 +220,13 @@ export interface UseScanStateReturn {
 export function useScanState(): UseScanStateReturn {
   const [state, dispatch] = useReducer(scanReducer, initialState);
 
-  // Flatten once per version change. `.flat()` is O(total) but runs only
-  // when a batch landed, not cumulatively inside the reducer on every batch.
+  // Flatten once per batch mutation. The reducer always returns a fresh
+  // `batches` array reference whenever the accumulated data changes, so
+  // the memo recomputes exactly when files are added/removed — no need to
+  // also key on the `filesVersion` counter.
   const files = useMemo(
     () => state.batches.flat(),
-    [state.filesVersion, state.batches],
+    [state.batches],
   );
 
   const onStart = useCallback(() => dispatch({ type: "start" }), []);
@@ -225,10 +278,22 @@ export function useScanState(): UseScanStateReturn {
     dispatch({ type: "done" });
   }, []);
 
-  const onProgress = useCallback(
-    (progress: ScanProgress) => dispatch({ type: "progress", progress }),
-    [],
-  );
+  const onProgress = useCallback((progress: ScanProgress) => {
+    // Progress messages arrive faster than the UI can paint. Coalesce
+    // last-write-wins on the same 150ms cadence as batches — intermediate
+    // snapshots are dropped instead of forcing a reducer pass + re-render
+    // for every message (a fast scan emits dozens per second).
+    progressRef.current = progress;
+    if (progressTimerRef.current) return;
+    progressTimerRef.current = setTimeout(() => {
+      progressTimerRef.current = null;
+      const latest = progressRef.current;
+      progressRef.current = null;
+      if (latest) dispatch({ type: "progress", progress: latest });
+    }, 150);
+  }, []);
+  const progressRef = useRef<ScanProgress | null>(null);
+  const progressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onError = useCallback(
     (message: string) => dispatch({ type: "error", message }),
     [],
@@ -253,6 +318,14 @@ export function useScanState(): UseScanStateReturn {
     },
     [flushMeta],
   );
+  const onRemoveFiles = useCallback(
+    (filePaths: Set<string>) => dispatch({ type: "removeFiles", filePaths }),
+    [],
+  );
+  const onAddFiles = useCallback(
+    (files: MediaFile[]) => dispatch({ type: "addFiles", files }),
+    [],
+  );
 
-  return { state, files, onStart, onReset, onBatch, onProgress, onDone, onError, onCancelled, onRestore, onMetaBatch };
+  return { state, files, onStart, onReset, onBatch, onProgress, onDone, onError, onCancelled, onRestore, onMetaBatch, onRemoveFiles, onAddFiles };
 }

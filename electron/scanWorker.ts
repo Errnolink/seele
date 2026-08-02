@@ -1,5 +1,6 @@
 import { scanFolderStream } from "../src/scanner/scan";
 import type { MediaFile, MetaPatch, ScanProgress } from "../src/scanner/types";
+import { imageSize } from "image-size";
 
 const controller = new AbortController();
 
@@ -21,19 +22,16 @@ process.parentPort.on("message", (event: unknown) => {
     return;
   }
 
-  let batchCount = 0;
-  let fileCount = 0;
-  const t0 = Date.now();
-
   scanFolderStream(
     folderPath,
     (files: MediaFile[]) => {
-      batchCount++;
-      fileCount += files.length;
       post({ type: "batch", files });
     },
     (progress: ScanProgress) => post({ type: "progress", progress }),
-    { signal: controller.signal },
+    {
+      signal: controller.signal,
+      probeDimensions: probeImageDimensions,
+    },
     (patches: MetaPatch[]) => post({ type: "metaBatch", patches }),
   )
     .then((total) => {
@@ -69,4 +67,24 @@ function readStringField(
 ): string | undefined {
   const v = data[field];
   return typeof v === "string" ? v : undefined;
+}
+
+/**
+ * Header-only dimension probe for image files. Receives a pre-read header
+ * Buffer (the first ~64KB of the file) so the scanner can merge stat +
+ * header-read into a single open() — no second file open per image.
+ * Runs in the worker thread so the main process never blocks. Returns
+ * `null` for corrupt/unsupported headers; the file keeps its placeholder
+ * `0×0` and the renderer falls back to a default aspect ratio.
+ */
+function probeImageDimensions(header: Buffer): { width: number; height: number } | null {
+  try {
+    const dim = imageSize(header);
+    if (dim && typeof dim.width === "number" && typeof dim.height === "number") {
+      return { width: dim.width, height: dim.height };
+    }
+  } catch {
+    // Corrupt or unsupported header → leave at 0×0.
+  }
+  return null;
 }

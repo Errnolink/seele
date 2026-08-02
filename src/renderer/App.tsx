@@ -1,23 +1,122 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import VirtualizedGrid, { type GroupHeader } from "./components/VirtualizedGrid";
-import FolderTree from "./components/FolderTree";
-import SearchBar from "./components/SearchBar";
-import GroupControls, { type GroupMode } from "./components/GroupControls";
-import SortControls, { type SortMode, type SortDir } from "./components/SortControls";
-import HexGridOverlay from "./components/HexGridOverlay";
-import BootSequence from "./components/BootSequence";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { Header } from "./components/Header";
+import { Sidebar } from "./components/Sidebar";
+import { MasonryGrid } from "./components/MasonryGrid";
+import { FolderBrowser } from "./components/FolderBrowser";
 import MediaViewer from "./components/MediaViewer";
-import ContextMenu, { type ContextMenuPosition } from "./components/ContextMenu";
-import { useSfx } from "./sfx/useSfx";
+import { ContextMenu } from "./components/ContextMenu";
+import CommandPalette from "./components/CommandPalette";
+import { KeyboardHelp } from "./components/KeyboardHelp";
+import AnalyticsModal from "./components/AnalyticsModal";
+import BootSequence from "./components/BootSequence";
+import MoveDialog from "./components/MoveDialog";
+import RenameDialog from "./components/RenameDialog";
+import BatchTagDialog from "./components/BatchTagDialog";
+import TitleBar from "./components/TitleBar";
+import ActivityLog, { type ActivityEntry } from "./components/ActivityLog";
+import SessionChangesModal from "./components/SessionChangesModal";
+import TrashQueueModal from "./components/TrashQueueModal";
+import SettingsModal from "./components/SettingsModal";
+import { DEFAULT_SETTINGS } from "./settingsDefaults";
+import type { AppSettings } from "../../electron/settings";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { formatBytes } from "./utils";
-import KeyboardHelp from "./components/KeyboardHelp";
 import { useScanState } from "./hooks/useScanState";
-import type { MediaFile, ScanProgress } from "../scanner/types";
+import { useTags } from "./hooks/useTags";
+import type {
+  FolderNode,
+  GroupMode,
+  MediaFile,
+  MediaTypeFilter,
+  ScanStats,
+  SortDir,
+  SortMode,
+  ViewMode,
+} from "./types";
+import type { ScanProgress } from "../scanner/types";
+import type { MediaId } from "./types";
 
-/** Minimum delay before re-filtering after the user stops typing (ms). */
 const SEARCH_DEBOUNCE_MS = 200;
+const LARGE_FILE_BYTES = 50 * 1024 * 1024;
 
+/**
+ * Build a nested folder tree from the flat file list (§10.1).
+ * Each node carries a running file count and size sum. Uses the
+ * scanner's precomputed `normPath` so we don't re-normalize on every
+ * render.
+ */
+function buildFolderTree(
+  files: MediaFile[],
+  rootPath: string,
+): FolderNode | null {
+  if (files.length === 0) return null;
+  const normRoot = rootPath.replace(/\\/g, "/").toLowerCase().replace(/\/$/, "");
+  const root: FolderNode = {
+    path: rootPath,
+    name: rootPath.split(/[\\/]/).pop() || rootPath,
+    count: 0,
+    size: 0,
+    children: [],
+  };
+  // Index children by their normalized path segment stack for dedup.
+  const nodeByPath = new Map<string, FolderNode>();
+  nodeByPath.set(normRoot, root);
+
+  for (const f of files) {
+    // Walk from root down to the file's folder.
+    const rel = f.normPath.startsWith(normRoot + "/")
+      ? f.normPath.slice(normRoot.length + 1)
+      : f.normPath;
+    const segs = rel.split("/").filter(Boolean);
+    // Drop the file name itself — keep directory segments only.
+    segs.pop();
+    let cur = root;
+    let acc = normRoot;
+    for (const seg of segs) {
+      acc += "/" + seg;
+      let child = nodeByPath.get(acc);
+      if (!child) {
+        child = {
+          path: acc,
+          name: seg,
+          count: 0,
+          size: 0,
+          children: [],
+        };
+        nodeByPath.set(acc, child);
+        cur.children.push(child);
+      }
+      cur = child;
+    }
+    cur.count += 1;
+    cur.size += f.sizeBytes;
+    root.count += 1;
+    root.size += f.sizeBytes;
+  }
+  // Aggregate counts up the tree so parent folders show total descendant files.
+  const aggregate = (nd: FolderNode): { count: number; size: number } => {
+    for (const c of nd.children) {
+      const a = aggregate(c);
+      nd.count += a.count;
+      nd.size += a.size;
+    }
+    return { count: nd.count, size: nd.size };
+  };
+  aggregate(root);
+  return root;
+}
+
+/** Count distinct folders in the tree (for the sidebar header). */
+function countFolders(node: FolderNode | null): number {
+  if (!node) return 0;
+  let n = 0;
+  const walk = (nd: FolderNode) => {
+    n += 1;
+    for (const c of nd.children) walk(c);
+  };
+  walk(node);
+  return n;
+}
 
 export default function App() {
   const {
@@ -32,53 +131,113 @@ export default function App() {
     onCancelled,
     onRestore,
     onMetaBatch,
+    onRemoveFiles,
+    onAddFiles,
   } = useScanState();
+
+  // ---- tag classification system (v2.5) ----
+  const tagSystem = useTags();
+
+  // ---- settings (performance knobs — issues.md item 6) ----
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [showSettings, setShowSettings] = useState(false);
+  // Load persisted settings on mount. On a true first launch (no file on
+  // disk), adopt the OS-level reduced-motion preference as the default
+  // and persist it so it survives restarts.
+  useEffect(() => {
+    void window.scanAPI.getSettings().then((res) => {
+      if (
+        !res.exists &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ) {
+        setSettings({ ...res.settings, reduceMotion: true });
+        void window.scanAPI.setSettings({ reduceMotion: true });
+      } else {
+        setSettings(res.settings);
+      }
+    }).catch(() => {
+      /* defaults already in state — best-effort */
+    });
+  }, []);
+  const updateSettings = useCallback((patch: Partial<AppSettings>) => {
+    setSettings((prev) => ({ ...prev, ...patch }));
+    void window.scanAPI.setSettings(patch).catch(() => {
+      /* main also clamps — best-effort */
+    });
+  }, []);
+
+  // ---- core state ----
+  const [booted, setBooted] = useState(false);
   const [folder, setFolder] = useState<string | null>(
     () => localStorage.getItem("wiergise:lastFolder"),
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>("masonry");
+  const [typeFilter, setTypeFilter] = useState<MediaTypeFilter>("all");
   const [groupMode, setGroupMode] = useState<GroupMode>("none");
-  // Sort dimension/order for the derived list (v3 review #14). "default"
-  // preserves the scan/grouping order; the others sort within the whole
-  // filtered set (and within each group when grouping is active).
-  const [sortMode, setSortMode] = useState<SortMode>("default");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [sortMode, setSortMode] = useState<SortMode>("date");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [gridDensity, setGridDensity] = useState(180);
+  // Slider ticks each re-pack the whole masonry grid (O(N) per tick). The
+  // deferred value coalesces intermediate positions so the pack recomputes
+  // at most once per frame while the label still updates live.
+  const packedDensity = useDeferredValue(gridDensity);
+  /** Folders hidden from the grid via context menu (subtree match). */
+  const [hiddenFolders, setHiddenFolders] = useState<Set<string>>(new Set());
+  const toggleHideFolder = useCallback((folderPath: string) => {
+    setHiddenFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderPath)) next.delete(folderPath);
+      else next.add(folderPath);
+      return next;
+    });
+  }, []);
 
-  // Media viewer (lightbox) state — v2 review #3.
+  // ---- selection + favorites ----
+  const [selectedIds, setSelectedIds] = useState<Set<MediaId>>(new Set());
+  const [favorites, setFavorites] = useState<Set<MediaId>>(new Set());
+
+  // ---- overlays ----
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
-  // CORR-4: Track the active file's path so viewerIndex stays in sync
-  // when derivedFiles mutates (search, sort, scan batch) while the
-  // viewer is open.
   const viewerFilePathRef = useRef<string | null>(null);
-
-  // Thumbnail right-click context menu (v3 review #13).
+  const [activeInspectFile, setActiveInspectFile] = useState<MediaFile | null>(
+    null,
+  );
   const [contextMenu, setContextMenu] = useState<{
     file: MediaFile;
-    position: ContextMenuPosition;
+    x: number;
+    y: number;
   } | null>(null);
-  // Drag-and-drop folder feedback overlay (UX-2).
-  const [isDragOver, setIsDragOver] = useState(false);
-  // Collapsible sidebar (UX-3).
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  // Grid density / thumbnail size control (UX-4).
-  const [gridDensity, setGridDensity] = useState(180);
-  // Keyboard help panel (UX-9).
+  const [folderContextMenu, setFolderContextMenu] = useState<{
+    folderPath: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [showPalette, setShowPalette] = useState(false);
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [showSessionLog, setShowSessionLog] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [isDragOver, setIsDragOver] = useState(false);
+  /** Bumped by the R key; forces errored tiles to re-fetch their thumbnail. */
+  const [reloadEpoch, setReloadEpoch] = useState(0);
 
-  // Debounce the search query so the heavy filter useMemo doesn't run on
-  // every keystroke (review issue #24).
   const debouncedQuery = useDebouncedValue(searchQuery, SEARCH_DEBOUNCE_MS);
 
-  const { playClick, playScan, playHover } = useSfx();
-
-  // Refs for keyboard shortcuts that need current values without
-  // re-binding the global listener on every state change (v4 review M-5).
+  // ---- refs for stable keyboard handler ----
   const folderRef = useRef(folder);
   const scanStatusRef = useRef(scan.status);
   const searchQueryRef = useRef(searchQuery);
   const selectedFolderRef = useRef(selectedFolder);
   const viewerIndexRef = useRef(viewerIndex);
+  const showPaletteRef = useRef(showPalette);
+  const showHelpRef = useRef(showHelp);
+  const showAnalyticsRef = useRef(showAnalytics);
+  const showSettingsRef = useRef(showSettings);
+  useEffect(() => {
+    showSettingsRef.current = showSettings;
+  }, [showSettings]);
   useEffect(() => {
     folderRef.current = folder;
   }, [folder]);
@@ -94,100 +253,73 @@ export default function App() {
   useEffect(() => {
     viewerIndexRef.current = viewerIndex;
   }, [viewerIndex]);
+  useEffect(() => {
+    showPaletteRef.current = showPalette;
+  }, [showPalette]);
+  useEffect(() => {
+    showHelpRef.current = showHelp;
+  }, [showHelp]);
+  useEffect(() => {
+    showAnalyticsRef.current = showAnalytics;
+  }, [showAnalytics]);
 
-  // Instant restore: on mount, if we have a cached folder, load its files
-  // from the on-disk dimension cache so the gallery appears immediately
-  // without a filesystem walk (v4 rework). The user can rescan to refresh.
+  // ---- instant cache restore on mount ----
   useEffect(() => {
     if (!folder) return;
     void window.scanAPI.loadCachedFiles(folder).then((cached) => {
       if (cached.length > 0) onRestore(cached);
+    }).catch(() => {
+      /* cache restore is best-effort — scan will fill in */
     });
-    // Run once on mount; `folder` is from localStorage initializer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Batch measured dimensions and flush to main via IPC on a timer (v4
-  // rework). The grid reports naturalWidth/Height per thumbnail as it
-  // decodes; we coalesce to avoid thousands of IPC round-trips on large
-  // libraries. Main persists these so the next startup restores the
-  // masonry at correct aspect ratios without re-decoding.
-  const dimBatchRef = useRef<
-    Map<string, { width: number; height: number }>
-  >(new Map());
-  const dimFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flushDimensions = useCallback(() => {
-    dimFlushRef.current = null;
-    const batch = dimBatchRef.current;
-    if (batch.size === 0) return;
-    const entries = Array.from(batch, ([filePath, d]) => ({ filePath, ...d }));
-    batch.clear();
-    void window.scanAPI.saveDimensions(entries);
-  }, []);
-  const handleDimensionsMeasured = useCallback(
-    (filePath: string, width: number, height: number) => {
-      dimBatchRef.current.set(filePath, { width, height });
-      if (dimFlushRef.current) return;
-      dimFlushRef.current = setTimeout(flushDimensions, 3000);
-    },
-    [flushDimensions],
-  );
-  useEffect(() => {
-    return () => {
-      if (dimFlushRef.current) clearTimeout(dimFlushRef.current);
-      flushDimensions();
-    };
-  }, [flushDimensions]);
 
-  const handleSelectFolder = useCallback(
-    (f: string | null) => {
-      playClick();
-      setSelectedFolder(f);
-    },
-    [playClick],
-  );
-
-  const handleGroupModeChange = useCallback(
-    (m: GroupMode) => {
-      playClick();
-      setGroupMode(m);
-    },
-    [playClick],
-  );
-
-  const handleSortModeChange = useCallback(
-    (m: SortMode) => {
-      playClick();
-      setSortMode(m);
-    },
-    [playClick],
-  );
-
-  const handleSortDirChange = useCallback(
-    (d: SortDir) => {
-      playClick();
-      setSortDir(d);
-    },
-    [playClick],
-  );
-
+  // ---- scan actions ----
   const pickFolder = useCallback(async () => {
-    playClick();
-    const picked = await window.scanAPI.selectFolder();
-    if (picked) {
-      setFolder(picked);
-      localStorage.setItem("wiergise:lastFolder", picked);
-      setSelectedFolder(null);
-      onReset();
-      // Restore cached files instantly if available.
-      const cached = await window.scanAPI.loadCachedFiles(picked);
-      if (cached.length > 0) onRestore(cached);
+    try {
+      const picked = await window.scanAPI.selectFolder();
+      if (picked) {
+        setFolder(picked);
+        localStorage.setItem("wiergise:lastFolder", picked);
+        setSelectedFolder(null);
+        onReset();
+        const cached = await window.scanAPI.loadCachedFiles(picked);
+        if (cached.length > 0) onRestore(cached);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      onError(message);
     }
-  }, [playClick, onReset, onRestore]);
+  }, [onReset, onRestore, onError]);
 
-  // Folder drag-and-drop (v3 review #12). Electron exposes real paths
-  // via DataTransferItemList, unlike a sandboxed browser. We accept the
-  // first dropped item and treat it like a folder picker result.
+  const startScan = useCallback(async () => {
+    if (!folder) return;
+    onStart();
+    try {
+      await window.scanAPI.startScan(
+        folder,
+        onBatch,
+        (p: ScanProgress) => onProgress(p),
+        () => onDone(),
+        (message: string) => onError(message),
+        (patches) => onMetaBatch(patches),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      onError(message);
+    }
+  }, [folder, onStart, onBatch, onProgress, onDone, onError, onMetaBatch]);
+
+  const cancelScan = useCallback(async () => {
+    try {
+      await window.scanAPI.cancelScan();
+    } catch {
+      /* best-effort */
+    }
+    onCancelled();
+  }, [onCancelled]);
+
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
@@ -206,64 +338,397 @@ export default function App() {
           }
         }
       }
-      // Fallback to files[].path if items isn't populated.
-      if (!droppedPath && e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+      if (
+        !droppedPath &&
+        e.dataTransfer?.files &&
+        e.dataTransfer.files.length > 0
+      ) {
         const p = (e.dataTransfer.files[0] as File & { path?: string })?.path;
         if (p) droppedPath = p;
       }
       if (droppedPath) {
-        playClick();
         setFolder(droppedPath);
         localStorage.setItem("wiergise:lastFolder", droppedPath);
         setSelectedFolder(null);
         onReset();
         void window.scanAPI.loadCachedFiles(droppedPath).then((cached) => {
           if (cached.length > 0) onRestore(cached);
+        }).catch(() => {
+          /* best-effort restore */
         });
       }
     },
-    [playClick, onReset, onRestore],
+    [onReset, onRestore],
   );
 
-  const cancelScan = useCallback(async () => {
-    playClick();
-    try {
-      await window.scanAPI.cancelScan();
-    } catch (e) {
-      // Best-effort; the worker may have already exited.
-      if (import.meta.env.DEV) console.debug("[cancelScan]", e);
+  // ---- selection ----
+  const toggleSelect = useCallback((filePath: string, e: React.MouseEvent) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (e.ctrlKey || e.metaKey) {
+        // toggle
+        if (next.has(filePath)) next.delete(filePath);
+        else next.add(filePath);
+      } else if (e.shiftKey) {
+        // additive
+        next.add(filePath);
+      } else {
+        // plain click → exclusive select
+        next.clear();
+        next.add(filePath);
+      }
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  // ---- favorites ----
+  const toggleFavorite = useCallback((file: MediaFile) => {
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(file.filePath)) next.delete(file.filePath);
+      else next.add(file.filePath);
+      return next;
+    });
+  }, []);
+
+  // ---- file operations (organize & move) ----
+
+  /** State for the in-app move dialog: null = closed, or the file paths to move. */
+  const [moveDialogPaths, setMoveDialogPaths] = useState<string[] | null>(null);
+  /** File being renamed (null = dialog closed). */
+  const [renameDialogFile, setRenameDialogFile] = useState<MediaFile | null>(null);
+  /** True when the batch tag dialog is open. */
+  const [showBatchTag, setShowBatchTag] = useState(false);
+  const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
+  const activityIdRef = useRef(0);
+
+  // ---- trash queue (ui-upgrade.md Issue 1) ----
+  // Staged deletions: nothing touches disk until Delete Forever / Empty
+  // Queue commits. Session-only — closing the app silently discards the
+  // queue (files were never sent to the OS trash).
+  const [trashQueue, setTrashQueue] = useState<Map<string, { file: MediaFile; queuedAt: number }>>(new Map());
+  const [showTrashQueue, setShowTrashQueue] = useState(false);
+
+  const logActivity = useCallback(
+    (action: ActivityEntry["action"], fileName: string, detail: string, ok: boolean, meta?: { fromPath?: string; toPath?: string }) => {
+      setActivityLog((prev) => [
+        {
+          id: ++activityIdRef.current,
+          action,
+          fileName,
+          detail,
+          ok,
+          timestamp: Date.now(),
+          ...(meta ? { fromPath: meta.fromPath, toPath: meta.toPath } : {}),
+        },
+        ...prev,
+      ].slice(0, 50));
+    },
+    [],
+  );
+
+  /** Open the move dialog for a single file (from context menu). */
+  const handleMoveFile = useCallback((file: MediaFile) => {
+    setMoveDialogPaths([file.filePath]);
+  }, []);
+
+  /** Open the move dialog for all selected files (from batch toolbar). */
+  const handleMoveSelected = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    setMoveDialogPaths([...selectedIds]);
+  }, [selectedIds]);
+
+  /**
+   * Keep the viewer on the next file when the one it's showing leaves the
+   * active set (trash/move) — only close when it was the last file
+   * (ui-upgrade.md Issue 2B). Must run BEFORE onRemoveFiles so the file
+   * still exists in derivedFilesRef when we read the next one.
+   */
+  const advanceViewer = useCallback((removedPaths: Set<string>) => {
+    if (viewerIndexRef.current === null || viewerFilePathRef.current === null) return;
+    if (!removedPaths.has(viewerFilePathRef.current)) return;
+    const arr = derivedFilesRef.current;
+    const idx = viewerIndexRef.current;
+    const next = arr[idx + 1];
+    if (next) {
+      viewerFilePathRef.current = next.filePath;
+    } else {
+      setViewerIndex(null);
+      viewerFilePathRef.current = null;
     }
-    // Transition the reducer to "cancelled" immediately so the UI
-    // reflects the cancel without waiting for the worker's final
-    // message (v2 review #5). Partial files already received are kept.
-    onCancelled();
-  }, [playClick, onCancelled]);
+  }, []);
 
+  /** Execute the move once the user picks a destination in the dialog. */
+  const handleMoveConfirm = useCallback(async (destDir: string) => {
+    const paths = moveDialogPaths;
+    setMoveDialogPaths(null);
+    if (!paths || paths.length === 0) return;
+    const results = await window.scanAPI.moveFiles(paths, destDir);
+    const moved = new Set(
+      results.filter((r) => r.ok).map((r) => r.filePath),
+    );
+    if (moved.size > 0) {
+      // Auto-advance the viewer if the file it was showing got moved
+      // (ui-upgrade.md Issue 2B).
+      advanceViewer(moved);
+      onRemoveFiles(moved);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const p of moved) next.delete(p);
+        return next;
+      });
+    }
+    const destName = destDir.split(/[\\/]/).pop() || destDir;
+    const okCount = results.filter((r) => r.ok).length;
+    const newPathByOld = new Map(
+      results.filter((r): r is { filePath: string; ok: boolean; newPath: string; error?: string } => Boolean(r.ok && r.newPath))
+        .map((r) => [r.filePath, r.newPath]),
+    );
+    logActivity(
+      "move",
+      okCount === 1 ? paths[0].split(/[\\/]/).pop() || paths[0] : `${okCount} files`,
+      `→ ${destName}`,
+      okCount > 0,
+      paths.length === 1 && okCount === 1
+        ? { fromPath: paths[0], toPath: newPathByOld.get(paths[0]) }
+        : undefined,
+    );
+  }, [moveDialogPaths, onRemoveFiles, logActivity, advanceViewer]);
 
-  const startScan = useCallback(async () => {
-    if (!folder) return;
-    playScan();
-    onStart();
+  /** Move files to a specific known directory (sidebar drop / quick move). */
+  const handleMoveToDir = useCallback(async (filePaths: string[], destDir: string) => {
+    if (filePaths.length === 0) return;
+    const results = await window.scanAPI.moveFiles(filePaths, destDir);
+    const moved = new Set(
+      results.filter((r) => r.ok).map((r) => r.filePath),
+    );
+    if (moved.size > 0) {
+      advanceViewer(moved);
+      onRemoveFiles(moved);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const p of moved) next.delete(p);
+        return next;
+      });
+    }
+    const destName = destDir.split(/[\\/]/).pop() || destDir;
+    const okCount = results.filter((r) => r.ok).length;
+    logActivity(
+      "move",
+      okCount === 1 ? filePaths[0].split(/[\\/]/).pop() || filePaths[0] : `${okCount} files`,
+      `→ ${destName}`,
+      okCount > 0,
+    );
+  }, [onRemoveFiles, logActivity, advanceViewer]);
 
-    try {
-      await window.scanAPI.startScan(
-        folder,
-        onBatch,
-        (p: ScanProgress) => onProgress(p),
-        () => onDone(),
-        (message: string) => onError(message),
-        (patches) => onMetaBatch(patches),
+  /** Stage files for trash — removes them from the grid, nothing on disk. */
+  const queueForTrash = useCallback((filesToQueue: MediaFile[]) => {
+    if (filesToQueue.length === 0) return;
+    setTrashQueue((prev) => {
+      const next = new Map(prev);
+      const now = Date.now();
+      for (const f of filesToQueue) {
+        if (!next.has(f.filePath)) next.set(f.filePath, { file: f, queuedAt: now });
+      }
+      return next;
+    });
+    onRemoveFiles(new Set(filesToQueue.map((f) => f.filePath)));
+  }, [onRemoveFiles]);
+
+  /** Grid context-menu / card trash button → stage, don't delete. */
+  const handleTrashFile = useCallback((file: MediaFile) => {
+    queueForTrash([file]);
+  }, [queueForTrash]);
+
+  /** Trash all selected files → stage them all. */
+  const handleTrashSelected = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    const queued = derivedFilesRef.current.filter((f) => selectedIds.has(f.filePath));
+    queueForTrash(queued);
+    setSelectedIds(new Set());
+  }, [selectedIds, queueForTrash]);
+
+  /** Pull a staged file back into the grid — no disk operation ever happened. */
+  const restoreFromQueue = useCallback((filePath: string) => {
+    const entry = trashQueue.get(filePath);
+    if (!entry) return;
+    setTrashQueue((prev) => {
+      const next = new Map(prev);
+      next.delete(filePath);
+      return next;
+    });
+    onAddFiles([entry.file]);
+  }, [trashQueue, onAddFiles]);
+
+  /** Commit a single staged file to the OS trash, now. */
+  const deleteFromQueue = useCallback(async (filePath: string) => {
+    const entry = trashQueue.get(filePath);
+    if (!entry) return;
+    const result = await window.scanAPI.trashFile(filePath);
+    if (result.ok) {
+      setTrashQueue((prev) => {
+        const next = new Map(prev);
+        next.delete(filePath);
+        return next;
+      });
+      logActivity("trash", entry.file.fileName, "", true);
+    } else {
+      // Keep the entry queued so the user can retry.
+      logActivity("trash", entry.file.fileName, result.error ?? "failed", false);
+    }
+  }, [trashQueue, logActivity]);
+
+  /** Commit every staged file to the OS trash (the only batch delete path). */
+  const emptyTrashQueue = useCallback(async () => {
+    const paths = [...trashQueue.keys()];
+    if (paths.length === 0) return;
+    const results = await window.scanAPI.trashFiles(paths);
+    const ok = new Set(results.filter((r) => r.ok).map((r) => r.filePath));
+    setTrashQueue((prev) => {
+      const next = new Map(prev);
+      for (const p of ok) next.delete(p);
+      return next;
+    });
+    const okCount = ok.size;
+    if (okCount > 0) {
+      const firstName = [...trashQueue.values()].find((e) => ok.has(e.file.filePath))?.file.fileName;
+      logActivity(
+        "trash",
+        okCount === 1 ? firstName ?? "1 file" : `${okCount} files`,
+        "",
+        true,
       );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      onError(message);
     }
-  }, [folder, playScan, onStart, onBatch, onProgress, onDone, onError, onMetaBatch]);
+  }, [trashQueue, logActivity]);
 
-  // Keyboard shortcuts (review issue #23).
+  /** Viewer trash button / Delete key: stage + auto-advance. */
+  const handleViewerTrash = useCallback((file: MediaFile) => {
+    queueForTrash([file]);
+    advanceViewer(new Set([file.filePath]));
+  }, [queueForTrash, advanceViewer]);
+
+  /** Rename a single file in place. */
+  const handleRenameFile = useCallback(async (file: MediaFile, newName: string) => {
+    const result = await window.scanAPI.renameFile(file.filePath, newName);
+    if (result.ok && result.newPath) {
+      // Re-add the renamed file under its new path so it stays in the grid
+      // (and the viewer keeps showing it instead of blanking out).
+      const renamed: MediaFile = {
+        ...file,
+        filePath: result.newPath,
+        fileName: newName,
+        fileNameLower: newName.toLowerCase(),
+        normPath: result.newPath.replace(/\\/g, "/").toLowerCase(),
+      };
+      if (viewerFilePathRef.current === file.filePath) {
+        viewerFilePathRef.current = result.newPath;
+      }
+      onRemoveFiles(new Set([file.filePath]));
+      onAddFiles([renamed]);
+    }
+    logActivity(
+      "rename",
+      file.fileName,
+      `→ ${newName}`,
+      result.ok,
+      result.ok ? { fromPath: file.filePath, toPath: result.newPath } : undefined,
+    );
+    return result;
+  }, [onRemoveFiles, onAddFiles, logActivity]);
+
+  /**
+   * Revert a committed move/rename by running the inverse disk operation
+   * (ui-upgrade.md Issue 1.5). Only single-file operations carry paths.
+   */
+  const revertEntry = useCallback(async (entry: ActivityEntry) => {
+    if (!entry.ok || !entry.fromPath || !entry.toPath) return;
+    if (entry.action === "move") {
+      const origDir = entry.fromPath.replace(/[\\/][^\\/]+$/, "");
+      const result = await window.scanAPI.moveFile(entry.toPath, origDir);
+      logActivity(
+        "move",
+        entry.fileName,
+        `↩ revert ${result.ok ? "OK" : `FAILED: ${result.error ?? "?"}`}`,
+        result.ok,
+        result.ok ? { fromPath: entry.toPath, toPath: result.newPath } : undefined,
+      );
+      return;
+    }
+    if (entry.action === "rename") {
+      const origName = entry.fromPath.split(/[\\/]/).pop() ?? entry.fileName;
+      const result = await window.scanAPI.renameFile(entry.toPath, origName);
+      logActivity(
+        "rename",
+        entry.fileName,
+        `↩ revert ${result.ok ? "OK" : `FAILED: ${result.error ?? "?"}`}`,
+        result.ok,
+        result.ok ? { fromPath: entry.toPath, toPath: result.newPath } : undefined,
+      );
+    }
+  }, [logActivity]);
+
+  /** Ctrl+Z: undo the most recent organizing action (viewer). */
+  const undoLastAction = useCallback(() => {
+    const last = activityLog[0];
+    if (
+      last &&
+      last.ok &&
+      last.fromPath &&
+      last.toPath &&
+      (last.action === "move" || last.action === "rename")
+    ) {
+      void revertEntry(last);
+      return;
+    }
+    // Nothing committed (or not undoable) — restore the most recent staged
+    // trash instead; it's pure app state and always reversible.
+    let latest: { filePath: string; queuedAt: number } | null = null;
+    for (const [filePath, e] of trashQueue) {
+      if (!latest || e.queuedAt > latest.queuedAt) latest = { filePath, queuedAt: e.queuedAt };
+    }
+    if (latest) restoreFromQueue(latest.filePath);
+  }, [activityLog, trashQueue, revertEntry, restoreFromQueue]);
+
+  // ---- viewer handlers ----
+  // Ref to the latest derivedFiles so navigation callbacks stay stable
+  // without depending on the array identity.
+  const derivedFilesRef = useRef<MediaFile[]>([]);
+
+  const openViewer = useCallback((file: MediaFile) => {
+    viewerFilePathRef.current = file.filePath;
+    const arr = derivedFilesRef.current;
+    const idx = arr.findIndex((f) => f.filePath === file.filePath);
+    setViewerIndex(idx >= 0 ? idx : 0);
+  }, []);
+
+  const navigateViewer = useCallback((direction: "prev" | "next") => {
+    setViewerIndex((prev) => {
+      if (prev === null) return prev;
+      const arr = derivedFilesRef.current;
+      const next =
+        direction === "prev"
+          ? Math.max(0, prev - 1)
+          : Math.min(arr.length - 1, prev + 1);
+      if (next !== prev && arr[next]) {
+        viewerFilePathRef.current = arr[next].filePath;
+      }
+      return next;
+    });
+  }, []);
+
+  // ---- keyboard shortcuts (§11) ----
+  // Refs so the keyboard handler can call latest handlers without deps churn.
+  const handleMoveSelectedRef = useRef(handleMoveSelected);
+  handleMoveSelectedRef.current = handleMoveSelected;
+  const handleTrashSelectedRef = useRef(handleTrashSelected);
+  handleTrashSelectedRef.current = handleTrashSelected;
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Ignore when typing in an input/textarea unless it's a handled combo.
       const target = e.target as HTMLElement | null;
       const inEditable =
         target &&
@@ -271,6 +736,12 @@ export default function App() {
           target.tagName === "TEXTAREA" ||
           target.isContentEditable);
 
+      // Ctrl/Cmd+K — command palette
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setShowPalette((s) => !s);
+        return;
+      }
       // Ctrl/Cmd+O — select folder
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "o") {
         e.preventDefault();
@@ -286,44 +757,91 @@ export default function App() {
         return;
       }
       if (inEditable) return;
-      // Ctrl/Cmd+F — focus search input (v4 review M-1: was a no-op).
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
-        e.preventDefault();
-        const input = document.querySelector<HTMLInputElement>(
-          'input[placeholder="Search files..."]',
-        );
-        input?.focus();
-      }
-      // ? — toggle keyboard help panel (UX-9).
+
+      // The viewer has its own key handling for Delete/M/F2/R/etc. — the
+      // grid shortcuts below must not double-fire while it's open
+      // (ui-upgrade.md Issue 2A).
+      if (viewerIndexRef.current !== null) return;
+
+      // ? — toggle keyboard help
       if (e.key === "?" || (e.shiftKey && e.key === "/")) {
         setShowHelp((s) => !s);
         return;
       }
-      // Escape — clear search, else clear folder selection.
-      // Defer to MediaViewer when the viewer is open so Escape doesn't
-      // double-fire (close viewer AND clear search) — v3 review #11.
-      // Uses refs so the listener doesn't rebind on every keystroke
-      // (v4 review M-5).
+      // Esc — close topmost overlay, then clear selection/folder/search
       if (e.key === "Escape") {
-        if (viewerIndexRef.current !== null) return;
+        if (showPaletteRef.current) {
+          setShowPalette(false);
+          return;
+        }
+        if (showHelpRef.current) {
+          setShowHelp(false);
+          return;
+        }
+        if (showAnalyticsRef.current) {
+          setShowAnalytics(false);
+          return;
+        }
+        if (showSettingsRef.current) {
+          setShowSettings(false);
+          return;
+        }
+        if (viewerIndexRef.current !== null) return; // viewer handles its own Esc
+        if (contextMenuRef.current) {
+          setContextMenu(null);
+          return;
+        }
+        if (selectedIdsRef.current.size > 0) {
+          clearSelection();
+          return;
+        }
         if (searchQueryRef.current) {
           setSearchQuery("");
         } else if (selectedFolderRef.current !== null) {
           setSelectedFolder(null);
         }
       }
+
+      // Delete — trash selected files
+      if (e.key === "Delete" && !inEditable && selectedIdsRef.current.size > 0) {
+        e.preventDefault();
+        void handleTrashSelectedRef.current?.();
+        return;
+      }
+      // M — move selected files
+      if (e.key.toLowerCase() === "m" && !inEditable && selectedIdsRef.current.size > 0) {
+        e.preventDefault();
+        handleMoveSelectedRef.current?.();
+        return;
+      }
+      // F2 — rename single selected file
+      if (e.key === "F2" && !inEditable && selectedIdsRef.current.size === 1) {
+        e.preventDefault();
+        const f = derivedFilesRef.current.find((df) =>
+          selectedIdsRef.current.has(df.filePath),
+        );
+        if (f) setRenameDialogFile(f);
+        return;
+      }
+      // R — reload failed thumbnails (errored tiles re-fetch via cache-buster)
+      if (e.key.toLowerCase() === "r" && !inEditable && viewerIndexRef.current === null) {
+        e.preventDefault();
+        setReloadEpoch((n) => n + 1);
+        return;
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [pickFolder, startScan]);
+  }, [pickFolder, startScan, clearSelection]);
 
-  // Derived filter & grouping pipeline.
-  // Uses precomputed `normPath` / `birthtimeMs` / `dateKey` from the
-  // scanner (review issues #10, #11) and the debounced query.
-  const { derivedFiles, groupHeaders, resultCount } = useMemo(() => {
+  // ---- derived data pipeline (§10) ----
+  // useTags() returns a fresh object every render, but its fields are
+  // referentially stable — destructure so the memo deps stay granular.
+  const { activeTags, getFileTags } = tagSystem;
+  const { derivedFiles, groups, resultCount } = useMemo(() => {
     const allFiles = files;
 
-    // 1. Folder filter — uses precomputed lowercase normPath.
+    // 1. Folder filter — restrict to selectedFolder subtree (if any).
     let folderFiltered = allFiles;
     if (selectedFolder !== null) {
       const normSel = selectedFolder.replace(/\\/g, "/").toLowerCase();
@@ -333,91 +851,106 @@ export default function App() {
       );
     }
 
-    // 2. Search filter — case-insensitive substring on file name.
-    //    Uses the precomputed `fileNameLower` so we don't allocate a
-    //    fresh lowercased string per file per query (v3 review #2).
-    let searchFiltered = folderFiltered;
-    const q = debouncedQuery.trim().toLowerCase();
-    if (q) {
-      searchFiltered = folderFiltered.filter((f) =>
-        f.fileNameLower.includes(q),
+    // 1b. Hidden-folder filter — exclude files whose path falls under any
+    // hidden folder (subtree match, case-insensitive).
+    let visibleFiles = folderFiltered;
+    if (hiddenFolders.size > 0) {
+      const hiddenNorms = [...hiddenFolders].map((h) =>
+        h.replace(/\\/g, "/").toLowerCase(),
+      );
+      visibleFiles = folderFiltered.filter(
+        (f) => !hiddenNorms.some((h) => {
+          const prefix = h.endsWith("/") ? h : h + "/";
+          return f.normPath === h || f.normPath.startsWith(prefix);
+        }),
       );
     }
 
-    const filteredCount = searchFiltered.length;
+    // 2. Type / favorite / large filter (§10.2 ii)
+    let typeFiltered = visibleFiles;
+    if (typeFilter === "image") {
+      typeFiltered = visibleFiles.filter((f) => f.fileType === "image");
+    } else if (typeFilter === "video") {
+      typeFiltered = visibleFiles.filter((f) => f.fileType === "video");
+    } else if (typeFilter === "favorite") {
+      typeFiltered = visibleFiles.filter((f) => favorites.has(f.filePath));
+    } else if (typeFilter === "large") {
+      typeFiltered = visibleFiles.filter(
+        (f) => f.sizeBytes > LARGE_FILE_BYTES,
+      );
+    }
 
-    // 3. Sort the filtered set when an explicit sort is active (v3 #14).
-    //    "default" preserves scan order. Grouping consumes the result so
-    //    the chosen order also applies within each group.
+    // 3. Search filter (case-insensitive on precomputed fileNameLower)
+    let searchFiltered = typeFiltered;
+    const q = debouncedQuery.trim().toLowerCase();
+    if (q) {
+      searchFiltered = typeFiltered.filter((f) => f.fileNameLower.includes(q));
+    }
+
+    // 3.5. Tag filter (v2.5) — only files that have at least one active tag.
+    let tagFiltered = searchFiltered;
+    if (activeTags.size > 0) {
+      tagFiltered = searchFiltered.filter((f) => {
+        const assigned = getFileTags(f.filePath);
+        return assigned.some((t) => activeTags.has(t.key));
+      });
+    }
+
+    const filteredCount = tagFiltered.length;
+
+    // 4. Sort (§10.2 iv). date is default.
     const sign = sortDir === "asc" ? 1 : -1;
-    const ordered =
-      sortMode === "default"
-        ? searchFiltered
-        : [...searchFiltered].sort((a, b) => {
-            if (sortMode === "name") {
-              return a.fileNameLower < b.fileNameLower
-                ? -sign
-                : a.fileNameLower > b.fileNameLower
-                  ? sign
-                  : 0;
-            }
-            if (sortMode === "size") {
-              return (a.sizeBytes - b.sizeBytes) * sign;
-            }
-            // date
-            const tA = Number.isFinite(a.birthtimeMs) ? a.birthtimeMs : 0;
-            const tB = Number.isFinite(b.birthtimeMs) ? b.birthtimeMs : 0;
-            return (tA - tB) * sign;
-          });
+    const ordered = [...tagFiltered].sort((a, b) => {
+      if (sortMode === "name") {
+        return a.fileNameLower < b.fileNameLower
+          ? -sign
+          : a.fileNameLower > b.fileNameLower
+            ? sign
+            : 0;
+      }
+      if (sortMode === "size") {
+        return (a.sizeBytes - b.sizeBytes) * sign;
+      }
+      if (sortMode === "resolution") {
+        return (a.width * a.height - b.width * b.height) * sign;
+      }
+      // date
+      const tA = Number.isFinite(a.birthtimeMs) ? a.birthtimeMs : 0;
+      const tB = Number.isFinite(b.birthtimeMs) ? b.birthtimeMs : 0;
+      return (tA - tB) * sign;
+    });
 
-    // 4. Grouping.
+    // 5. Grouping (§10.3)
     if (groupMode === "none") {
       return {
         derivedFiles: ordered,
-        groupHeaders: undefined,
+        groups: [{ label: "", files: ordered }],
         resultCount: filteredCount,
       };
     }
-
-    if (groupMode === "date") {
-      // Partition `ordered` by dateKey, preserving the user's sort order
-      // within each bucket. When sortMode === "default" the within-group
-      // order is scan order.
-      const sorted: MediaFile[] = [];
-      const buckets = new Map<string, MediaFile[]>();
-      const bucketOrder: string[] = [];
-      for (let i = 0; i < ordered.length; i++) {
-        const f = ordered[i];
-        const key = f.dateKey;
-        let bucket = buckets.get(key);
-        if (!bucket) {
-          bucket = [];
-          buckets.set(key, bucket);
-          bucketOrder.push(key);
-        }
-        bucket.push(f);
+    const bucketMap = new Map<string, MediaFile[]>();
+    const bucketOrder: string[] = [];
+    for (const f of ordered) {
+      let key: string;
+      if (groupMode === "date") key = f.dateKey;
+      else if (groupMode === "type") key = f.fileType === "image" ? "IMAGE" : "VIDEO";
+      else if (groupMode === "folder") key = f.filePath.split(/[\\/]/).slice(-2, -1)[0] || "ROOT";
+      else key = `${f.width}x${f.height}`;
+      let bucket = bucketMap.get(key);
+      if (!bucket) {
+        bucket = [];
+        bucketMap.set(key, bucket);
+        bucketOrder.push(key);
       }
-      // When no explicit sort is chosen, present date buckets newest-first
-      // (the original default). Under an explicit sort the buckets are
-      // already in the user's chosen order via `ordered`.
-      if (sortMode === "default") {
-        bucketOrder.sort((ka, kb) => {
-          const ta = Number.isFinite(buckets.get(ka)![0].birthtimeMs)
-            ? buckets.get(ka)![0].birthtimeMs
-            : 0;
-          const tb = Number.isFinite(buckets.get(kb)![0].birthtimeMs)
-            ? buckets.get(kb)![0].birthtimeMs
-            : 0;
-          return tb - ta;
-        });
-      }
-      const headers: GroupHeader[] = [];
-      for (let b = 0; b < bucketOrder.length; b++) {
-        const key = bucketOrder[b];
-        const bucket = buckets.get(key)!;
-        const startIndex = sorted.length;
-        for (let i = 0; i < bucket.length; i++) sorted.push(bucket[i]);
-        const label =
+      bucket.push(f);
+    }
+    const groupedFiles: MediaFile[] = [];
+    const outGroups: Array<{ label: string; files: MediaFile[] }> = [];
+    for (const key of bucketOrder) {
+      const bucket = bucketMap.get(key)!;
+      let label = key;
+      if (groupMode === "date") {
+        label =
           key === "unknown"
             ? "Unknown Date"
             : new Date(bucket[0].birthtimeMs).toLocaleDateString(undefined, {
@@ -425,43 +958,32 @@ export default function App() {
                 month: "long",
                 day: "numeric",
               });
-        headers.push({ key, label, startIndex });
       }
-
-      return {
-        derivedFiles: sorted,
-        groupHeaders: headers,
-        resultCount: filteredCount,
-      };
+      outGroups.push({ label, files: bucket });
+      for (const f of bucket) groupedFiles.push(f);
     }
-
-    // groupMode === "type" — partition `ordered`, preserving within-group order.
-    const images: MediaFile[] = [];
-    const videos: MediaFile[] = [];
-    for (let i = 0; i < ordered.length; i++) {
-      const f = ordered[i];
-      if (f.fileType === "image") images.push(f);
-      else videos.push(f);
-    }
-    const sorted = [...images, ...videos];
-    const headers: GroupHeader[] = [];
-    if (images.length > 0) {
-      headers.push({ key: "images", label: "Images", startIndex: 0 });
-    }
-    if (videos.length > 0) {
-      headers.push({ key: "videos", label: "Videos", startIndex: images.length });
-    }
-
     return {
-      derivedFiles: sorted,
-      groupHeaders: headers,
+      derivedFiles: groupedFiles,
+      groups: outGroups,
       resultCount: filteredCount,
     };
-  }, [files, debouncedQuery, selectedFolder, groupMode, sortMode, sortDir]);
+  }, [files, selectedFolder, hiddenFolders, typeFilter, favorites, debouncedQuery, groupMode, sortMode, sortDir, activeTags, getFileTags]);
 
-  // CORR-4: When derivedFiles changes and the viewer is open, re-resolve
-  // viewerIndex by the tracked file path. If the file was removed by a
-  // filter change, close the viewer gracefully.
+  // Keep a live ref of derivedFiles for the viewer navigation handler.
+  // (derivedFilesRef itself is declared alongside the handlers above.)
+  useEffect(() => {
+    derivedFilesRef.current = derivedFiles;
+  }, [derivedFiles]);
+  const contextMenuRef = useRef(contextMenu);
+  useEffect(() => {
+    contextMenuRef.current = contextMenu;
+  }, [contextMenu]);
+  const selectedIdsRef = useRef(selectedIds);
+  useEffect(() => {
+    selectedIdsRef.current = selectedIds;
+  }, [selectedIds]);
+
+  // CORR-4: resolve viewerIndex by path when derivedFiles changes.
   useEffect(() => {
     if (viewerIndex === null || viewerFilePathRef.current === null) return;
     const idx = derivedFiles.findIndex(
@@ -475,112 +997,39 @@ export default function App() {
     }
   }, [derivedFiles, viewerIndex]);
 
-  // Summary stats for the status bar (UX-8).
-  const stats = useMemo(() => {
-    let images = 0;
-    let videos = 0;
-    let totalBytes = 0;
+
+  // ---- stats (§10.4) ----
+  const stats: ScanStats = useMemo(() => {
+    let imageCount = 0;
+    let videoCount = 0;
+    let totalSizeBytes = 0;
     for (const f of files) {
-      if (f.fileType === "video") videos++;
-      else images++;
-      totalBytes += f.sizeBytes;
+      if (f.fileType === "video") videoCount++;
+      else imageCount++;
+      totalSizeBytes += f.sizeBytes;
     }
-    return { images, videos, totalBytes };
+    return { totalFiles: files.length, imageCount, videoCount, totalSizeBytes };
   }, [files]);
 
-  // Media viewer (lightbox) handlers — v2 review #3.
-  // Index arrives from the grid (absolute tile index), avoiding an O(n)
-  // findIndex on every click (v3 review #5).
-  const openViewer = useCallback((file: MediaFile, index: number) => {
-    viewerFilePathRef.current = file.filePath;
-    setViewerIndex(index);
-  }, []);
-
-  // Right-click on a thumbnail opens the context menu (v3 review #13).
-  const handleThumbnailContextMenu = useCallback(
-    (file: MediaFile, e: React.MouseEvent) => {
-      setContextMenu({ file, position: { x: e.clientX, y: e.clientY } });
-    },
-    [],
+  // Defer the folder-tree rebuild while batches stream in during a scan:
+  // rebuilding the full hierarchy on every batch (hundreds per scan) was
+  // re-deriving everything each time. The deferred value drops intermediate
+  // states and keeps the tree one commit behind fast mutations.
+  const deferredFiles = useDeferredValue(files);
+  const folderTree = useMemo(
+    () => buildFolderTree(deferredFiles, folder || ""),
+    [deferredFiles, folder],
   );
-
-  const contextMenuItems = useMemo(() => {
-    if (!contextMenu) return [];
-    const file = contextMenu.file;
-    return [
-      {
-        key: "open-default",
-        label: "Open with default app",
-        icon: <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M8 5v14l11-7z" /></svg>,
-        onClick: () => void window.scanAPI.openPath(file.filePath),
-      },
-      {
-        key: "show-in-folder",
-        label: "Show in file manager",
-        icon: <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>,
-        onClick: () => void window.scanAPI.showItemInFolder(file.filePath),
-      },
-      { key: "div1", label: undefined },
-      {
-        key: "open-viewer",
-        label: "Open in viewer",
-        icon: <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="3" /><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" /></svg>,
-        onClick: () => {
-          const idx = derivedFiles.findIndex(
-            (f) => f.filePath === file.filePath,
-          );
-          setViewerIndex(idx >= 0 ? idx : 0);
-        },
-      },
-      { key: "div2", label: undefined },
-      {
-        key: "copy-path",
-        label: "Copy file path",
-        icon: <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>,
-        onClick: () => void window.scanAPI.writeClipboard(file.filePath),
-      },
-      {
-        key: "copy-name",
-        label: "Copy file name",
-        icon: <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M4 7V4h16v3M9 20h6M12 4v16" /></svg>,
-        onClick: () => void window.scanAPI.writeClipboard(file.fileName),
-      },
-    ];
-  }, [contextMenu, derivedFiles]);
-
-  const navigateViewer = useCallback(
-    (direction: "prev" | "next") => {
-      setViewerIndex((prev) => {
-        if (prev === null || derivedFiles.length === 0) return prev;
-        // Stop at boundaries — no wrap-around (v3 review #8).
-        const next = direction === "prev" ? (prev > 0 ? prev - 1 : prev) : (prev < derivedFiles.length - 1 ? prev + 1 : prev);
-        if (next !== prev && derivedFiles[next]) {
-          viewerFilePathRef.current = derivedFiles[next].filePath;
-        }
-        return next;
-      });
-    },
-    [derivedFiles],
-  );
-
-  const navigateViewerTo = useCallback(
-    (index: number) => {
-      if (index >= 0 && index < derivedFiles.length) {
-        viewerFilePathRef.current = derivedFiles[index].filePath;
-        setViewerIndex(index);
-      }
-    },
-    [derivedFiles],
-  );
+  const totalFolders = useMemo(() => countFolders(folderTree), [folderTree]);
 
   const isScanning = scan.status === "scanning";
   const showIdleState = scan.status === "idle" && scan.count === 0;
-  const showEmptyState =
-    scan.status === "done" && scan.count === 0 && !debouncedQuery;
 
   return (
     <div
-      className="flex flex-col h-screen w-screen overflow-hidden bg-nerv-bg text-nerv-text font-mono relative z-10 box-border"
+      className={`h-screen w-screen flex flex-col bg-nerv-bg text-nerv-text overflow-hidden relative font-mono select-none ${
+        settings.reduceMotion ? "seele-reduce-motion" : ""
+      } ${settings.dialogBlur ? "" : "seele-no-blur"}`}
       onDragEnter={(e) => {
         if (e.dataTransfer?.types?.includes("Files")) {
           e.preventDefault();
@@ -591,7 +1040,12 @@ export default function App() {
         if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
       }}
       onDragLeave={(e) => {
-        if (e.dataTransfer?.types?.includes("Files") && e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+        if (
+          (e.dataTransfer?.types?.includes("Files") && e.clientX <= 0) ||
+          e.clientY <= 0 ||
+          e.clientX >= window.innerWidth ||
+          e.clientY >= window.innerHeight
+        ) {
           setIsDragOver(false);
         }
       }}
@@ -600,14 +1054,30 @@ export default function App() {
         handleDrop(e);
       }}
     >
-      <HexGridOverlay />
-      <BootSequence durationMs={import.meta.env.DEV ? 0 : 600} />
+      {!booted && (
+        <BootSequence
+          durationMs={import.meta.env.DEV ? 0 : 1800}
+          onDone={() => setBooted(true)}
+        />
+      )}
+      {/* CRT scanline overlay (v2.5 §2.4) */}
+      <div className="crt-overlay" aria-hidden="true" />
 
-      {/* Drag-and-drop overlay (UX-2) */}
+      <TitleBar folder={folder} />
+
+      {/* Drag-and-drop overlay */}
       {isDragOver && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-nerv-bg/90 backdrop-blur-sm border-2 border-dashed border-nerv-orange pointer-events-none">
-          <div className="flex flex-col items-center gap-3 animate-pulse">
-            <svg viewBox="0 0 24 24" width="72" height="72" fill="none" stroke="currentColor" strokeWidth={1.5} className="text-nerv-orange">
+          <div className="flex flex-col items-center gap-3">
+            <svg
+              viewBox="0 0 24 24"
+              width="72"
+              height="72"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              className="text-nerv-orange"
+            >
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
             </svg>
             <span className="font-display text-lg uppercase tracking-widest text-nerv-amber font-bold">
@@ -617,228 +1087,144 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Top app bar ─────────────────────────────────────────── */}
-      <header className="titlebar-drag relative z-20 flex flex-col flex-shrink-0 border-b border-nerv-border/60 bg-nerv-panel/40 backdrop-blur-sm">
-        {/* Row 1 — wordmark + actions + search */}
-        <div className="no-drag flex items-center gap-3 pl-4 h-12" style={{ paddingRight: "160px" }}>
-          {/* Wordmark */}
-          <div className="flex items-center gap-2 flex-shrink-0 pr-3 border-r border-nerv-border/60 h-full">
-            <span className="w-2 h-2 bg-nerv-orange animate-blink flex-shrink-0" />
-            <span className="font-display text-sm font-bold uppercase tracking-[0.2em] text-nerv-orange">
-              Wiergise
-            </span>
-            <span className="text-[9px] uppercase tracking-widest text-nerv-muted hidden sm:inline">
-              media scanner
-            </span>
-          </div>
+      {/* Header */}
+      <Header
+        currentFolder={folder}
+        onPickFolder={pickFolder}
+        onScan={startScan}
+        scanning={isScanning}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        typeFilter={typeFilter}
+        onTypeFilterChange={setTypeFilter}
+        groupMode={groupMode}
+        onGroupModeChange={setGroupMode}
+        sortMode={sortMode}
+        onSortModeChange={setSortMode}
+        sortDir={sortDir}
+        onSortDirChange={setSortDir}
+        gridDensity={gridDensity}
+        onGridDensityChange={setGridDensity}
+        resultCount={resultCount}
+        totalCount={scan.count}
+        selectedCount={selectedIds.size}
+        onOpenHelp={() => setShowHelp(true)}
+        onOpenPalette={() => setShowPalette(true)}
+        onOpenAnalytics={() => setShowAnalytics(true)}
+        onOpenSettings={() => setShowSettings(true)}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((s) => !s)}
+      />
 
-          {/* Folder + scan actions */}
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <button
-              type="button"
-              className="px-3 h-8 bg-nerv-panel-2 border border-nerv-border hover:border-nerv-orange text-nerv-text text-xs uppercase transition-all duration-150 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
-              onClick={pickFolder}
-              title="Select folder (Ctrl+O)"
-            >
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              </svg>
-              <span className="max-w-[160px] truncate">{folder ? "Change" : "Open"}</span>
-            </button>
-            <button
-              type="button"
-              className="px-4 h-8 bg-nerv-orange hover:bg-nerv-amber text-nerv-bg font-bold text-xs uppercase transition-all duration-150 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_0_10px_rgba(255,85,0,0.25)] flex items-center gap-1.5"
-              onClick={startScan}
-              disabled={!folder || isScanning}
-              title="Start scan (Ctrl+Enter)"
-            >
-              {isScanning ? (
-                <span className="w-3 h-3 border-2 border-nerv-bg/40 border-t-nerv-bg rounded-full animate-spin" />
-              ) : (
-                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
+      {/* Status strip (compact, below header) */}
+      {(isScanning || scan.status !== "idle") && (
+        <div className="no-drag flex items-center gap-3 px-4 h-7 border-b border-nerv-border/40 text-[10px] font-mono flex-shrink-0 z-20 bg-nerv-panel/40">
+          {isScanning ? (
+            <>
+              <span className="text-nerv-amber font-semibold">
+                {scan.count.toLocaleString()} files found
+              </span>
+              <div className="h-px flex-1 max-w-[200px] bg-nerv-panel-2 overflow-hidden">
+                <div className="h-full w-1/3 bg-nerv-orange animate-pulse" />
+              </div>
+              {scan.progress && (
+                <span
+                  className="text-nerv-muted/70 truncate max-w-[220px]"
+                  title={scan.progress.currentDir}
+                >
+                  {scan.progress.currentDir}
+                </span>
               )}
-              {isScanning ? "Scanning" : "Scan"}
-            </button>
-            {isScanning && (
               <button
                 type="button"
-                className="px-3 h-8 bg-transparent border border-nerv-amber/60 hover:bg-nerv-amber/10 text-nerv-amber text-xs uppercase transition-all duration-150 cursor-pointer"
+                className="ml-auto text-nerv-amber hover:text-nerv-red underline no-drag"
                 onClick={cancelScan}
-                title="Cancel the active scan"
               >
-                Cancel
+                CANCEL
               </button>
-            )}
-          </div>
-
-          {/* Search — fills the middle */}
-          <SearchBar
-            value={searchQuery}
-            onChange={setSearchQuery}
-            resultCount={resultCount}
-            totalCount={scan.count}
-          />
-
-          {/* Filters */}
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <GroupControls mode={groupMode} onChange={handleGroupModeChange} />
-            <SortControls
-              mode={sortMode}
-              dir={sortDir}
-              onModeChange={handleSortModeChange}
-              onDirChange={handleSortDirChange}
-            />
-
-            {/* Grid density slider (UX-4) */}
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <svg className="w-3 h-3 text-nerv-muted" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" />
-                <rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" />
-              </svg>
-              <input
-                type="range"
-                min={100}
-                max={400}
-                value={gridDensity}
-                onChange={(e) => setGridDensity(Number(e.target.value))}
-                className="w-20 h-1 accent-nerv-orange"
-                title="Thumbnail size"
-              />
-              <svg className="w-4 h-4 text-nerv-muted" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="2" y="2" width="20" height="20" rx="1" />
-              </svg>
-            </div>
-          </div>
-        </div>
-
-        {/* Row 2 — status strip (folder path + scan status) */}
-        <div className="flex items-center gap-3 px-4 h-7 border-t border-nerv-border/40 text-[10px] font-mono">
-          {folder ? (
-            <span className="text-nerv-muted truncate max-w-[50%]" title={folder}>
-              <span className="text-nerv-muted/60">ROOT</span>{" "}
-              <span className="text-nerv-text/80">{folder}</span>
-            </span>
+            </>
           ) : (
-            <span className="text-nerv-muted/50">No folder selected</span>
-          )}
-
-          {/* Progress bar (inline when scanning) */}
-          {isScanning && (
-            <div className="h-px flex-1 max-w-[200px] bg-nerv-panel-2 overflow-hidden">
-              <div className="h-full w-1/3 bg-nerv-orange animate-scanline-bar" />
-            </div>
-          )}
-
-          {scan.status !== "idle" && (
-            <div className="flex items-center gap-2 ml-auto">
-              {scan.status === "scanning" ? (
-                <>
-                  <span className="text-nerv-amber font-semibold">
-                    {scan.count.toLocaleString()} files found
-                  </span>
-                  {scan.progress && (
-                    <span className="text-nerv-muted/70 truncate max-w-[220px]" title={scan.progress.currentDir}>
-                      {scan.progress.currentDir}
-                    </span>
-                  )}
-                </>
-              ) : (
-                <>
-                  <span
-                    className={`font-semibold tracking-wider ${
-                      scan.status === "done" ? "text-nerv-green" : "text-nerv-amber"
-                    }`}
-                  >
-                    {scan.status === "done"
-                      ? `SCAN COMPLETE · ${scan.count.toLocaleString()} FILES`
-                      : scan.status === "cancelled"
-                        ? `CANCELLED · ${scan.count.toLocaleString()} FILES`
-                        : "SCAN FAILED"}
-                  </span>
-                  {scan.status === "done" && (
-                    <>
-                      <span className="text-nerv-muted/40">|</span>
-                      <span className="text-nerv-cyan text-[10px]">
-                        {stats.images.toLocaleString()} images
-                      </span>
-                      <span className="text-nerv-green text-[10px]">
-                        {stats.videos.toLocaleString()} videos
-                      </span>
-                      <span className="text-nerv-muted text-[10px]">
-                        {formatBytes(stats.totalBytes)}
-                      </span>
-                    </>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-
-        {/* Error banner */}
-        {scan.status === "error" && scan.error && (
-          <div className="flex items-center gap-2 text-[10px] font-mono text-nerv-amber bg-nerv-amber/5 border-t border-nerv-amber/30 px-4 h-7">
-            <span className="font-bold">⚠ {scan.error}</span>
-            <button
-              type="button"
-              className="text-nerv-muted hover:text-nerv-amber underline ml-auto"
-              onClick={onReset}
+            <span
+              className={`font-semibold tracking-wider ${
+                scan.status === "done"
+                  ? "text-nerv-green"
+                  : scan.status === "cancelled"
+                    ? "text-nerv-amber"
+                    : "text-nerv-red"
+              }`}
             >
-              dismiss
-            </button>
-          </div>
-        )}
-        </div>
-      </header>
-
-      {/* ── Body: sidebar + main ───────────────────────────────── */}
-      <div className="flex flex-1 min-h-0 relative z-10">
-        {/* Sidebar collapse toggle (UX-3) */}
-        <button
-          type="button"
-          onClick={() => setSidebarOpen((s) => !s)}
-          className="absolute top-1/2 -translate-y-1/2 z-30 w-5 h-10 bg-nerv-panel border border-nerv-border/60 flex items-center justify-center text-nerv-muted hover:text-nerv-orange hover:border-nerv-orange/50 transition-all cursor-pointer"
-          style={{ left: sidebarOpen ? "240px" : "0" }}
-          title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-        >
-          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path d={sidebarOpen ? "M15 18l-6-6 6-6" : "M9 18l6-6-6-6"} />
-          </svg>
-        </button>
-
-        {/* Sidebar */}
-        <aside className={`${sidebarOpen ? "w-[240px] min-w-[240px]" : "w-0 min-w-0"} h-full flex-shrink-0 border-r border-nerv-border/60 bg-nerv-panel/20 overflow-hidden flex flex-col transition-all duration-200`}>
-          <div className="flex items-center justify-between px-3 h-8 border-b border-nerv-border/40 flex-shrink-0">
-            <span className="text-[10px] uppercase tracking-widest text-nerv-muted font-bold">
-              Navigation
+              {scan.status === "done"
+                ? `SCAN COMPLETE · ${scan.count.toLocaleString()} FILES`
+                : scan.status === "cancelled"
+                  ? `CANCELLED · ${scan.count.toLocaleString()} FILES`
+                  : "SCAN FAILED"}
             </span>
-            {selectedFolder && (
-              <button
-                type="button"
-                className="text-[9px] uppercase text-nerv-cyan hover:text-nerv-amber"
-                onClick={() => setSelectedFolder(null)}
-              >
-                Clear
-              </button>
-            )}
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <FolderTree
-              files={files}
-              filesVersion={scan.count}
-              rootPath={folder || ""}
-              selectedFolder={selectedFolder}
-              onSelect={handleSelectFolder}
-            />
-          </div>
-        </aside>
+          )}
+          {scan.status === "done" && (
+            <span className="ml-auto text-nerv-muted">
+              {stats.imageCount.toLocaleString()} img ·{" "}
+              {stats.videoCount.toLocaleString()} vid ·{" "}
+              {formatBytes(stats.totalSizeBytes)}
+            </span>
+          )}
+        </div>
+      )}
 
-        {/* Main grid area — full-bleed, no panel boxing */}
+      {/* Error banner */}
+      {scan.status === "error" && scan.error && (
+        <div className="flex items-center gap-2 text-[10px] font-mono text-nerv-amber bg-nerv-amber/5 border-b border-nerv-amber/30 px-4 h-7 flex-shrink-0 z-20">
+          <span className="font-bold">{scan.error}</span>
+          <button
+            type="button"
+            className="text-nerv-muted hover:text-nerv-amber underline ml-auto"
+            onClick={onReset}
+          >
+            dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Body: sidebar + main */}
+      <div className="flex flex-1 min-h-0 relative z-10">
+        <Sidebar
+          open={sidebarOpen}
+          tree={folderTree}
+          totalFolders={totalFolders}
+          selectedFolder={selectedFolder}
+          onSelectFolder={setSelectedFolder}
+          hiddenFolders={hiddenFolders}
+          typeFilter={typeFilter}
+          onTypeFilterChange={setTypeFilter}
+          stats={stats}
+          favoriteCount={favorites.size}
+          onDropFiles={handleMoveToDir}
+          selectedIds={selectedIds}
+          tags={tagSystem.tags}
+          activeTags={tagSystem.activeTags}
+          tagCounts={tagSystem.tagCounts}
+          onAddTag={tagSystem.addTag}
+          onRemoveTag={tagSystem.removeTag}
+          onToggleActiveTag={tagSystem.toggleActiveTag}
+          onFolderContextMenu={(folderPath, x, y) =>
+            setFolderContextMenu({ folderPath, x, y })
+          }
+        />
+
+        {/* Main content */}
         <main className="flex-1 min-w-0 h-full relative overflow-hidden bg-nerv-bg">
           {showIdleState ? (
             <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-5 p-8 text-center">
-              <svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" strokeWidth="1" className="text-nerv-orange/40">
+              <svg
+                viewBox="0 0 24 24"
+                width="64"
+                height="64"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1}
+                className="text-nerv-orange/40"
+              >
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
               </svg>
               <div className="flex flex-col gap-1.5">
@@ -847,64 +1233,533 @@ export default function App() {
                 </p>
                 <p className="text-nerv-muted/60 text-xs max-w-xs">
                   Open a folder, then press{" "}
-                  <kbd className="px-1.5 py-0.5 border border-nerv-orange/40 text-nerv-orange text-[10px]">Ctrl</kbd>
+                  <kbd className="px-1.5 py-0.5 border border-nerv-orange/40 text-nerv-orange text-[10px]">
+                    Ctrl
+                  </kbd>
                   +
-                  <kbd className="px-1.5 py-0.5 border border-nerv-orange/40 text-nerv-orange text-[10px]">Enter</kbd>{" "}
+                  <kbd className="px-1.5 py-0.5 border border-nerv-orange/40 text-nerv-orange text-[10px]">
+                    Enter
+                  </kbd>{" "}
                   to scan.
                 </p>
               </div>
               <button
                 type="button"
-                className="mt-2 px-5 py-2 bg-nerv-orange hover:bg-nerv-amber text-nerv-bg font-mono font-bold text-xs uppercase transition-all duration-150 cursor-pointer shadow-[0_0_12px_rgba(255,85,0,0.3)]"
+                className="mt-2 px-5 py-2 bg-nerv-orange hover:bg-nerv-amber text-nerv-bg font-mono font-bold text-xs uppercase transition-colors duration-150 cursor-pointer shadow-[0_0_12px_rgba(255,152,48,0.3)]"
                 onClick={pickFolder}
               >
-                Open folder…
+                Open folder...
               </button>
             </div>
-          ) : showEmptyState ? (
+          ) : viewMode === "folders" ? (
+            <FolderBrowser
+              tree={folderTree}
+              currentFolder={selectedFolder}
+              onSelectFolder={setSelectedFolder}
+              files={files}
+              totalBytes={stats.totalSizeBytes}
+              hiddenFolders={hiddenFolders}
+              onToggleHideFolder={toggleHideFolder}
+              onFolderContextMenu={(folderPath, x, y) =>
+                setFolderContextMenu({ folderPath, x, y })
+              }
+            />
+          ) : groups.length === 0 || resultCount === 0 ? (
             <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-3">
-              <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-nerv-orange/30">
+              <svg
+                viewBox="0 0 24 24"
+                width="48"
+                height="48"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                className="text-nerv-orange/30"
+              >
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
               </svg>
-              <p className="text-sm text-nerv-muted/70">No media files found in this folder.</p>
+              <p className="text-sm text-nerv-muted/70">
+                No media files match the current filters.
+              </p>
             </div>
           ) : (
-            <VirtualizedGrid
-              files={derivedFiles}
-              groupHeaders={groupHeaders}
-              onThumbnailHover={playHover}
-              onThumbnailClick={openViewer}
-              onThumbnailContextMenu={handleThumbnailContextMenu}
-              onDimensionsMeasured={handleDimensionsMeasured}
-              targetColumnWidth={gridDensity}
+            <MasonryGrid
+              groups={groups}
+              viewMode={viewMode}
+              groupMode={groupMode}
+              targetColumnWidth={packedDensity}
+              selectedIds={selectedIds}
+              favorites={favorites}
+              onToggleSelect={toggleSelect}
+              onOpen={openViewer}
+              onMove={handleMoveFile}
+              onRename={(f) => setRenameDialogFile(f)}
+              onTrash={handleTrashFile}
+              onToggleFavorite={toggleFavorite}
+              onContextMenu={(file, e) => {
+                e.preventDefault();
+                setContextMenu({ file, x: e.clientX, y: e.clientY });
+              }}
+              onInspect={(file) => {
+                setActiveInspectFile(file);
+                if (viewMode !== "split") openViewer(file);
+              }}
+              onCloseInspector={() => setActiveInspectFile(null)}
+              activeInspectFile={activeInspectFile}
+              reloadEpoch={reloadEpoch}
+              overscan={settings.overscan}
+              tags={tagSystem.tags}
+              fileTagGetter={tagSystem.getFileTags}
+              onToggleFileTag={tagSystem.toggleFileTag}
             />
           )}
         </main>
       </div>
+      {/* Footer status telemetry bar (v2.5 §1b) */}
+      {scan.status !== "idle" && (
+        <footer className="flex items-center gap-3 px-4 h-7 border-t border-nerv-border/60 bg-nerv-panel/40 text-[10px] font-mono flex-shrink-0 z-20">
+          <span className="text-nerv-text-dim tracking-wider">STATUS</span>
+          <span
+            className={`font-bold tracking-wider ${
+              scan.status === "done"
+                ? "text-nerv-green"
+                : scan.status === "scanning"
+                  ? "text-nerv-orange"
+                  : scan.status === "error"
+                    ? "text-nerv-red"
+                    : "text-nerv-text-dim"
+            }`}
+          >
+            {scan.status === "done"
+              ? "\u25CF NOMINAL"
+              : scan.status === "scanning"
+                ? "\u25CF ACTIVE"
+                : scan.status === "error"
+                  ? "\u25CF FAULT"
+                  : "\u25CF IDLE"}
+          </span>
+          {stats.totalFiles > 0 && (
+            <>
+              <span className="text-nerv-border-highlight">{"\u2502"}</span>
+              {/* Segmented ratio bar */}
+              <div className="eva-segbar flex h-3 w-32">
+                {(() => {
+                  const img = stats.imageCount;
+                  const vid = stats.videoCount;
+                  // Enforce a minimum 10% sliver for any non-zero type
+                  // so a small-but-present count is always visible.
+                  let imgPct = (img / stats.totalFiles) * 100;
+                  let vidPct = (vid / stats.totalFiles) * 100;
+                  const MIN = 10;
+                  if (img > 0 && imgPct < MIN) imgPct = MIN;
+                  if (vid > 0 && vidPct < MIN) vidPct = MIN;
+                  if (imgPct + vidPct > 100) {
+                    // Over-clamped — scale the dominant one down.
+                    if (img >= vid) imgPct = 100 - vidPct;
+                    else vidPct = 100 - imgPct;
+                  }
+                  return (
+                    <>
+                      <div
+                        className="bg-nerv-cyan"
+                        style={{ width: `${imgPct}%` }}
+                        title={`IMG: ${img.toLocaleString()} (${((img / stats.totalFiles) * 100).toFixed(1)}%)`}
+                      />
+                      {vid > 0 && (
+                        <div
+                          className="bg-nerv-green"
+                          style={{ width: `${vidPct}%` }}
+                          title={`VID: ${vid.toLocaleString()} (${((vid / stats.totalFiles) * 100).toFixed(1)}%)`}
+                        />
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+              <span className="text-nerv-cyan tabular-nums">
+                IMG {stats.imageCount.toLocaleString()}
+              </span>
+              <span className="text-nerv-green tabular-nums">
+                VID {stats.videoCount.toLocaleString()}
+              </span>
+              <span className="text-nerv-border-highlight">{"\u2502"}</span>
+              <span className="text-nerv-text-dim tabular-nums">
+                {formatBytes(stats.totalSizeBytes)}
+              </span>
+            </>
+          )}
+          {selectedIds.size > 0 && (
+            <span className="ml-auto text-nerv-orange tabular-nums font-bold">
+              {selectedIds.size} SELECTED
+            </span>
+          )}
+        </footer>
+      )}
 
-      {/* Fullscreen media viewer */}
+      {contextMenu && (
+        <ContextMenu
+          position={{ x: contextMenu.x, y: contextMenu.y }}
+          items={[
+            {
+              key: "open-viewer",
+              label: "Open in Viewer",
+              onClick: () => {
+                openViewer(contextMenu.file);
+                setContextMenu(null);
+              },
+            },
+            {
+              key: "open-default",
+              label: "Open with Default",
+              onClick: () =>
+                void window.scanAPI.openPath(contextMenu.file.filePath),
+            },
+            {
+              key: "show-in-folder",
+              label: "Show in File Manager",
+              onClick: () =>
+                void window.scanAPI.showItemInFolder(contextMenu.file.filePath),
+            },
+            {
+              key: "copy-path",
+              label: "Copy File Path",
+              onClick: () =>
+                void window.scanAPI.writeClipboard(contextMenu.file.filePath),
+            },
+            {
+              key: "copy-name",
+              label: "Copy File Name",
+              onClick: () =>
+                void window.scanAPI.writeClipboard(contextMenu.file.fileName),
+            },
+            { key: "sep-1" },
+            {
+              key: "move",
+              label: "Move to Folder...",
+              onClick: () => {
+                void handleMoveFile(contextMenu.file);
+                setContextMenu(null);
+              },
+            },
+            {
+              key: "rename",
+              label: "Rename...",
+              onClick: () => {
+                setRenameDialogFile(contextMenu.file);
+                setContextMenu(null);
+              },
+            },
+            { key: "sep-2" },
+            {
+              key: "trash",
+              label: "Move to Trash",
+              onClick: () => {
+                void handleTrashFile(contextMenu.file);
+                setContextMenu(null);
+              },
+            },
+            { key: "sep-3" },
+            {
+              key: "hide-folder",
+              label: "Hide Containing Folder",
+              onClick: () => {
+                const dir = contextMenu.file.filePath.replace(/[\\/][^\\/]+$/, "");
+                if (dir) toggleHideFolder(dir);
+                setContextMenu(null);
+              },
+            },
+          ]}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {folderContextMenu && (
+        <ContextMenu
+          position={{ x: folderContextMenu.x, y: folderContextMenu.y }}
+          items={[
+            {
+              key: "open-folder",
+              label: "Open in Browser",
+              onClick: () => {
+                setSelectedFolder(folderContextMenu.folderPath);
+                setViewMode("folders");
+                setFolderContextMenu(null);
+              },
+            },
+            { key: "sep-1" },
+            {
+              key: "reveal-folder",
+              label: "Reveal in File Manager",
+              onClick: () => {
+                void window.scanAPI.showItemInFolder(folderContextMenu.folderPath);
+                setFolderContextMenu(null);
+              },
+            },
+            {
+              key: "copy-folder-path",
+              label: "Copy Folder Path",
+              onClick: () => {
+                void window.scanAPI.writeClipboard(folderContextMenu.folderPath);
+                setFolderContextMenu(null);
+              },
+            },
+            { key: "sep-2" },
+            {
+              key: "toggle-hide",
+              label: hiddenFolders.has(folderContextMenu.folderPath)
+                ? "Unhide Folder"
+                : "Hide Folder",
+              onClick: () => {
+                toggleHideFolder(folderContextMenu.folderPath);
+                setFolderContextMenu(null);
+              },
+            },
+          ]}
+          onClose={() => setFolderContextMenu(null)}
+        />
+      )}
+
+      {/* Floating batch action toolbar */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-stretch shadow-[0_4px_24px_rgba(0,0,0,0.5)]">
+          {/* Counter badge */}
+          <div className="eva-ticket flex items-center gap-2 px-4 bg-nerv-orange/15 border border-nerv-orange">
+            <span className="text-nerv-orange font-bold text-sm tabular-nums">
+              {String(selectedIds.size).padStart(3, "0")}
+            </span>
+            <span className="text-[9px] font-mono tracking-widest uppercase text-nerv-amber">
+              Selected
+            </span>
+          </div>
+
+          {/* Actions */}
+          <button
+            type="button"
+            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-amber/60 hover:bg-nerv-amber/5 transition-colors group"
+            onClick={() => {
+              // Single state update for the whole selection — the previous
+              // per-file toggleFavorite loop fired N setState calls, each
+              // re-rendering the entire grid.
+              const picked = derivedFiles
+                .filter((f) => selectedIds.has(f.filePath))
+                .map((f) => f.filePath);
+              setFavorites((prev) => {
+                const next = new Set(prev);
+                for (const p of picked) {
+                  if (next.has(p)) next.delete(p);
+                  else next.add(p);
+                }
+                return next;
+              });
+            }}
+          >
+            <span className="text-nerv-amber text-xs">★</span>
+            <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-nerv-text group-hover:text-nerv-amber">
+              Fav
+            </span>
+          </button>
+          <button
+            type="button"
+            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-cyan/60 hover:bg-nerv-cyan/5 transition-colors group"
+            onClick={() => setShowBatchTag(true)}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="text-nerv-cyan">
+              <path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" />
+              <circle cx="7" cy="7" r="1.4" fill="currentColor" />
+            </svg>
+            <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-nerv-text group-hover:text-nerv-cyan">
+              Tag
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-lime/60 hover:bg-nerv-lime/5 transition-colors group"
+            onClick={() => void handleMoveSelected()}
+          >
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="text-nerv-lime">
+              <path d="M2 8h9M7 4l4 4-4 4M14 3v10" />
+            </svg>
+            <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-nerv-text group-hover:text-nerv-lime">
+              Move
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-red/60 hover:bg-nerv-red/5 transition-colors group"
+            onClick={() => void handleTrashSelected()}
+          >
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="text-nerv-red">
+              <path d="M3 5h10M6 5V3h4v2M5 5l1 9h4l1-9" />
+            </svg>
+            <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-nerv-text group-hover:text-nerv-red">
+              Trash
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className="eva-ticket px-3 flex items-center bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-muted hover:bg-nerv-panel-2 transition-colors group"
+            onClick={clearSelection}
+          >
+            <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-nerv-muted group-hover:text-nerv-text">
+              ✕
+            </span>
+          </button>
+        </div>
+      )}
+
+      {/* Lightbox */}
       {viewerIndex !== null && derivedFiles[viewerIndex] && (
         <MediaViewer
           file={derivedFiles[viewerIndex]}
           files={derivedFiles}
           index={viewerIndex}
-          onClose={() => setViewerIndex(null)}
+          onClose={() => {
+            setViewerIndex(null);
+            viewerFilePathRef.current = null;
+          }}
           onNavigate={navigateViewer}
-          onNavigateTo={navigateViewerTo}
+          onNavigateTo={(i) => {
+            if (derivedFiles[i]) {
+              viewerFilePathRef.current = derivedFiles[i].filePath;
+              setViewerIndex(i);
+            }
+          }}
+          onMove={handleMoveFile}
+          onRename={(f) => setRenameDialogFile(f)}
+          onTrash={handleViewerTrash}
+          onToggleFavorite={toggleFavorite}
+          isFavorite={viewerFilePathRef.current !== null && favorites.has(viewerFilePathRef.current)}
+          onUndo={undoLastAction}
+          queuedCount={trashQueue.size}
+          modalOpen={moveDialogPaths !== null || renameDialogFile !== null || showTrashQueue}
+          tags={tagSystem.tags}
+          fileTags={
+            viewerFilePathRef.current
+              ? tagSystem.getFileTags(viewerFilePathRef.current)
+              : undefined
+          }
+          onToggleFileTag={tagSystem.toggleFileTag}
         />
       )}
 
-      {/* Right-click context menu */}
-      {contextMenu && (
-        <ContextMenu
-          position={contextMenu.position}
-          items={contextMenuItems}
-          onClose={() => setContextMenu(null)}
+      {moveDialogPaths && folderTree && (
+        <MoveDialog
+          tree={folderTree}
+          count={moveDialogPaths.length}
+          onClose={() => setMoveDialogPaths(null)}
+          onConfirm={handleMoveConfirm}
+        />
+      )}
+      {renameDialogFile && (
+        <RenameDialog
+          file={renameDialogFile}
+          onClose={() => setRenameDialogFile(null)}
+          onConfirm={(file, newName) => {
+            setRenameDialogFile(null);
+            void handleRenameFile(file, newName);
+          }}
+        />
+      )}
+      {showBatchTag && selectedIds.size > 0 && (
+        <BatchTagDialog
+          tags={tagSystem.tags}
+          filePaths={[...selectedIds]}
+          getFileTags={tagSystem.getFileTags}
+          onBatchToggle={tagSystem.batchAssign}
+          onClose={() => setShowBatchTag(false)}
         />
       )}
 
-      {/* Keyboard help panel (UX-9) */}
+      <ActivityLog
+        entries={activityLog}
+        onClear={() => setActivityLog([])}
+      />
+
+      {/* Session log badge button — opens full audit trail modal */}
+      {activityLog.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowSessionLog(true)}
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-4 py-1.5 bg-nerv-panel border border-nerv-orange/40 text-nerv-orange text-[10px] font-mono font-bold tracking-wider hover:bg-nerv-orange/10 hover:shadow-[0_0_12px_rgba(255,152,48,0.3)] transition-[background-color,color,box-shadow]"
+        >
+          <span className="w-1.5 h-1.5 bg-nerv-orange animate-pulse-soft" />
+          SESSION LOG
+          <span className="tag-chip bg-nerv-orange/20 px-1.5 py-0.5 text-[9px]">
+            {activityLog.length}
+          </span>
+        </button>
+      )}
+
+      {/* Overlays */}
       {showHelp && <KeyboardHelp onClose={() => setShowHelp(false)} />}
+      {showPalette && (
+        <CommandPalette
+          files={derivedFiles}
+          onClose={() => setShowPalette(false)}
+          onSelect={(f) => {
+            setShowPalette(false);
+            openViewer(f);
+          }}
+        />
+      )}
+      {showAnalytics && (
+        <AnalyticsModal
+          files={files}
+          onClose={() => setShowAnalytics(false)}
+          onOpenMedia={(f) => {
+            setShowAnalytics(false);
+            openViewer(f);
+          }}
+        />
+      )}
+
+      {/* Session Audit Trail Modal — v2.5 §Module 7 */}
+      {showSessionLog && (
+        <SessionChangesModal
+          open={showSessionLog}
+          entries={activityLog}
+          onClose={() => setShowSessionLog(false)}
+          onClear={() => {
+            setActivityLog([]);
+            setShowSessionLog(false);
+          }}
+          onRevert={revertEntry}
+        />
+      )}
+
+      {/* Trash Queue badge + modal (ui-upgrade.md Issue 1) */}
+      {trashQueue.size > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowTrashQueue(true)}
+          className="fixed bottom-6 left-6 z-40 flex items-center gap-2 px-4 py-1.5 bg-nerv-panel border border-nerv-red/40 text-nerv-red text-[10px] font-mono font-bold tracking-wider hover:bg-nerv-red/10 hover:shadow-[0_0_12px_rgba(255,77,48,0.3)] transition-[background-color,color,box-shadow]"
+        >
+          <span className="w-1.5 h-1.5 bg-nerv-red animate-pulse-soft" />
+          TRASH QUEUE
+          <span className="tag-chip bg-nerv-red/20 px-1.5 py-0.5 text-[9px]">
+            {trashQueue.size}
+          </span>
+        </button>
+      )}
+      <TrashQueueModal
+        open={showTrashQueue}
+        entries={[...trashQueue.values()]}
+        onClose={() => setShowTrashQueue(false)}
+        onRestore={restoreFromQueue}
+        onDelete={(filePath) => void deleteFromQueue(filePath)}
+        onEmptyAll={() => void emptyTrashQueue()}
+      />
+
+      {/* Settings — performance & accessibility knobs (issues.md item 6) */}
+      {showSettings && (
+        <SettingsModal
+          settings={settings}
+          onChange={updateSettings}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </div>
   );
 }

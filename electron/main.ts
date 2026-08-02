@@ -9,12 +9,17 @@ import {
   shell,
   clipboard,
 } from "electron";
-import sharp from "sharp";
+import sharp, { type Metadata } from "sharp";
 import path from "node:path";
 import fs from "node:fs";
+import { execFile } from "node:child_process";
+import { tmpdir } from "node:os";
+import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import * as mediaCache from "./mediaCache";
+import * as settingsStore from "./settings";
 import type { MediaFile, MetaPatch, ScanProgress } from "../src/scanner/types";
+import { FILE_TYPE_BY_EXT } from "../src/scanner/extensions";
 
 /* ------------------------------------------------------------------ *
  *  Window management
@@ -29,15 +34,7 @@ function createWindow(): void {
     minWidth: 800,
     minHeight: 600,
     show: false,
-    // Custom frameless titlebar (UX-14). On Windows, `titleBarOverlay`
-    // reserves a small caption area for native min/max/close buttons
-    // overlaying our titlebar, so window controls still work.
-    titleBarStyle: "hidden",
-    titleBarOverlay: {
-      color: "#0a0a0a",
-      symbolColor: "#e0530a",
-      height: 48,
-    },
+    frame: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -60,6 +57,15 @@ function createWindow(): void {
     mainWindow = null;
   });
 }
+
+// ── Window controls (custom titlebar) ──────────────────────────────
+ipcMain.on("win:minimize", () => mainWindow?.minimize());
+ipcMain.on("win:maximize", () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+});
+ipcMain.on("win:close", () => mainWindow?.close());
 
 // Privileged scheme: lets the (sandboxed) renderer load local image/video
 // thumbnails via `media://local/<encoded-path>` without a file:// origin.
@@ -144,7 +150,7 @@ function messageTotal(msg: unknown): number {
   return 0;
 }
 
-/** Narrow and return the `folderPath` string from a worker start message. */
+/** Narrow and return a string field from a worker message. */
 function messageStringField(msg: unknown, field: string): string | undefined {
   if (msg && typeof msg === "object" && field in msg) {
     const v = (msg as Record<string, unknown>)[field];
@@ -153,12 +159,146 @@ function messageStringField(msg: unknown, field: string): string | undefined {
   return undefined;
 }
 
-/** PERF: LRU cache for downscaled images so scrolling back doesn't
- * re-decode the source. Keyed on `${path}?w=${w}`.
- * 150 entries caps memory at ~30MB (thumbnail tier) / ~60MB (viewer tier)
- * — the previous 500 entries could hold ~200MB of JPEG buffers alone. */
+/** Two-tier thumbnail cache: in-memory LRU (hot) + on-disk JPEGs (cold).
+ *  The disk tier lives under app.getPath("cache") so the OS can reclaim it,
+ *  but OS cleanup (Windows Storage Sense / Disk Cleanup) is opt-in and
+ *  unreliable — the app enforces its own oldest-first eviction on the disk
+ *  tier instead (pruneThumbCache). Surviving across restarts means
+ *  ffmpeg/sharp never re-extract a thumbnail that's already on disk.
+ *  Keyed on a content-derived hash of the cache key string. */
 const thumbCache = new Map<string, Uint8Array>();
 const THUMB_CACHE_MAX = 150;
+/** Disk-tier budget: cap both the file count and the total bytes so a large
+ *  library cannot grow the cold cache without bound. */
+const THUMB_DISK_MAX_FILES = 5000;
+const THUMB_DISK_MAX_BYTES = 512 * 1024 * 1024;
+/** Don't scan the whole cache dir more often than this — a prune pass on
+ *  every store would thrash the disk on cold-cache bursts. */
+const THUMB_PRUNE_MIN_INTERVAL_MS = 60_000;
+let lastThumbPruneAt = 0;
+
+/** Resolve the on-disk cache directory. Lazily created on first use.
+ *  On Windows this targets %LOCALAPPDATA%/<app>/Cache — the same folder
+ *  Windows Storage Sense / Disk Cleanup reclaims, but the app also prunes
+ *  it itself (pruneThumbCache). On macOS/Linux, userData/thumbs. */
+let thumbDir = "";
+function getThumbDir(): string {
+  if (!thumbDir) {
+    let base: string;
+    if (process.platform === "win32" && process.env.LOCALAPPDATA) {
+      base = path.join(process.env.LOCALAPPDATA, "seele", "Cache");
+    } else {
+      base = path.join(app.getPath("userData"), "thumbs");
+    }
+    try {
+      thumbDir = path.join(base, "thumbs");
+      fs.mkdirSync(thumbDir, { recursive: true });
+    } catch {
+      thumbDir = path.join(tmpdir(), "seele-thumbs");
+      fs.mkdirSync(thumbDir, { recursive: true });
+    }
+  }
+  return thumbDir;
+}
+
+/** Sniff Content-Type from the first bytes of a cached thumbnail.
+ *  JPEG/PNG/WEBP/GIF all have reliable magic bytes; default to JPEG for
+ *  anything unrecognizable (the historical fallback). */
+function sniffThumbType(bytes: Uint8Array): string {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return "image/webp";
+  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return "image/gif";
+  return "image/jpeg";
+}
+
+/** Map a cache key to a stable, filesystem-safe filename. SHA-1 keeps it
+ *  short and collision-free; the leading prefix sharding prevents any
+ *  single directory from holding 50k flat entries (faster fs ops). The
+ *  extension is omitted — cached bytes may be JPEG or PNG depending on
+ *  the source's alpha channel, so we sniff on read instead. */
+function thumbDiskPath(cacheKey: string): string {
+  const hash = createHash("sha1").update(cacheKey).digest("hex");
+  return path.join(getThumbDir(), hash.slice(0, 2), hash);
+}
+
+/** Enforce the disk-tier budget: walk the shard dirs, then evict oldest
+ *  files (by mtime) until both the file-count and byte caps are satisfied.
+ *  Throttled to once a minute and best-effort — a slow disk or a full
+ *  backlog must never block thumbnail serving. */
+async function pruneThumbCache(): Promise<void> {
+  const now = Date.now();
+  if (now - lastThumbPruneAt < THUMB_PRUNE_MIN_INTERVAL_MS) return;
+  lastThumbPruneAt = now;
+  try {
+    const root = getThumbDir();
+    const entries: Array<{ p: string; size: number; mtime: number }> = [];
+    for (const shard of await fs.promises.readdir(root, { withFileTypes: true })) {
+      if (!shard.isDirectory()) continue;
+      const shardPath = path.join(root, shard.name);
+      for (const f of await fs.promises.readdir(shardPath, { withFileTypes: true })) {
+        if (!f.isFile()) continue;
+        const st = await fs.promises.stat(path.join(shardPath, f.name)).catch(() => null);
+        if (st) entries.push({ p: path.join(shardPath, f.name), size: st.size, mtime: st.mtimeMs });
+      }
+    }
+    let totalBytes = entries.reduce((s, e) => s + e.size, 0);
+    if (entries.length <= THUMB_DISK_MAX_FILES && totalBytes <= THUMB_DISK_MAX_BYTES) return;
+    entries.sort((a, b) => a.mtime - b.mtime);
+    let evicted = 0;
+    for (const e of entries) {
+      if (entries.length - evicted <= THUMB_DISK_MAX_FILES && totalBytes <= THUMB_DISK_MAX_BYTES) break;
+      await fs.promises.unlink(e.p).catch(() => {});
+      totalBytes -= e.size;
+      evicted++;
+    }
+    if (evicted > 0 && !app.isPackaged) {
+      console.debug(`[media] thumb disk prune: evicted ${evicted} files`);
+    }
+  } catch { /* best-effort */ }
+}
+
+/** Store a thumbnail in both tiers (RAM LRU + disk) and run eviction.
+ *  The disk write is async + best-effort — a failure just means the next
+ *  request re-extracts; it never blocks serving the response or the main
+ *  process event loop (sync writes here froze scrolling on cold caches). */
+function storeThumb(cacheKey: string, bytes: Uint8Array): void {
+  thumbCache.set(cacheKey, bytes);
+  if (thumbCache.size > THUMB_CACHE_MAX) {
+    const oldest = thumbCache.keys().next().value;
+    if (oldest !== undefined) thumbCache.delete(oldest);
+  }
+  const p = thumbDiskPath(cacheKey);
+  fs.promises
+    .mkdir(path.dirname(p), { recursive: true })
+    .then(() => fs.promises.writeFile(p, bytes))
+    .catch((e) => {
+      if (!app.isPackaged) console.debug("[media] thumb disk write failed:", e);
+    });
+  void pruneThumbCache();
+}
+
+/** Look up a thumbnail across both tiers. On a RAM miss, checks disk and
+ *  backfills the RAM LRU so subsequent hits are fast. Returns null if
+ *  absent from both. Async — the disk read never blocks the event loop. */
+async function lookupThumb(cacheKey: string): Promise<Uint8Array | null> {
+  const ramHit = thumbCache.get(cacheKey);
+  if (ramHit) {
+    thumbCache.delete(cacheKey);
+    thumbCache.set(cacheKey, ramHit); // LRU bump.
+    return ramHit;
+  }
+  try {
+    const buf = await fs.promises.readFile(thumbDiskPath(cacheKey));
+    const diskHit = new Uint8Array(buf);
+    // Backfill RAM without re-evicting just for a disk promotion — only
+    // store if there's room; otherwise the disk copy still serves us.
+    if (thumbCache.size < THUMB_CACHE_MAX) thumbCache.set(cacheKey, diskHit);
+    return diskHit;
+  } catch {
+    return null;
+  }
+}
 
 /** Limit concurrent sharp operations. Without this, a grid of 50
  * visible tiles fires 50 parallel libvips decodes — each allocates its
@@ -167,7 +307,9 @@ const THUMB_CACHE_MAX = 150;
  * bounding resource use. */
 const sharpQueue: (() => void)[] = [];
 let sharpActive = 0;
-const SHARP_CONCURRENCY = 4;
+/** Concurrent sharp decodes — fed by the settings decodeConcurrency knob
+ *  (default 4), not a hardcoded constant (issues.md item 5). */
+let sharpConcurrency = 4;
 function withSharpLimit<T>(fn: () => Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const run = () => {
@@ -180,7 +322,7 @@ function withSharpLimit<T>(fn: () => Promise<T>): Promise<T> {
           if (next) next();
         });
     };
-    if (sharpActive < SHARP_CONCURRENCY) run();
+    if (sharpActive < sharpConcurrency) run();
     else sharpQueue.push(run);
   });
 }
@@ -189,23 +331,115 @@ function withSharpLimit<T>(fn: () => Promise<T>): Promise<T> {
 // event-loop blocking, ~5MB peak per decode vs nativeImage's full-res
 // bitmap.
 
+/** Concurrency limit for ffmpeg frame extraction. ffmpeg spawns its own
+ * threads + decodes; unbounded parallel extraction on a grid of 50
+ * videos would swamp CPU. 2 keeps first-paint latency low. */
+const ffmpegQueue: (() => void)[] = [];
+let ffmpegActive = 0;
+/** Concurrency limit for ffmpeg frame extraction — half the settings
+ *  decodeConcurrency value (default 2), matching the old constant. */
+let ffmpegConcurrency = 2;
+function withFfmpegLimit<T>(fn: () => Promise<T>): Promise<T> {
+  const { promise, resolve, reject } = Promise.withResolvers<T>();
+  const run = () => {
+    ffmpegActive++;
+    fn().then(resolve, reject).finally(() => {
+      ffmpegActive--;
+      const next = ffmpegQueue.shift();
+      if (next) next();
+    });
+  };
+  if (ffmpegActive < ffmpegConcurrency) run();
+  else ffmpegQueue.push(run);
+  return promise;
+}
 
-/** Downscale `requested` to width `w` and return a JPEG Response, or null
- * to signal the caller to fall back to the raw stream. Results are LRU
- * cached. Replaced the old nativeImage path (sync, full-res bitmap decode
- * on the main thread → froze the UI on large images). */
+/** Sync the sharp/ffmpeg semaphore sizes with the persisted settings.
+ *  Called at startup and on every settings change (issues.md item 5). */
+function applyConcurrencySettings(settings: settingsStore.AppSettings): void {
+  sharpConcurrency = Math.max(1, Math.min(6, settings.decodeConcurrency));
+  ffmpegConcurrency = Math.max(1, Math.round(sharpConcurrency / 2));
+}
+/** Locate ffmpeg on the system PATH. Cached after first lookup.
+ *  `where` is Windows-only; macOS/Linux use `which`. */
+let ffmpegPath: string | null | undefined;
+async function findFfmpeg(): Promise<string | null> {
+  if (ffmpegPath !== undefined) return ffmpegPath;
+  const { promise, resolve } = Promise.withResolvers<string | null>();
+  const cmd = process.platform === "win32" ? "where" : "which";
+  const proc = execFile(cmd, ["ffmpeg"], { timeout: 3000 }, (err, stdout) => {
+    if (err || !stdout.trim()) { ffmpegPath = null; return resolve(null); }
+    ffmpegPath = stdout.trim().split(/\r?\n/)[0];
+    resolve(ffmpegPath);
+  });
+  proc.on("error", () => { ffmpegPath = null; resolve(null); });
+  return promise;
+}
+
+/** Extract a single frame from a video at ~1s and resize it with sharp.
+ *  Cached in the two-tier thumbnail cache (RAM LRU + disk). Returns a
+ *  JPEG Response or null if ffmpeg/sharp fails. */
+async function serveVideoThumb(
+  requested: string,
+  w: number,
+): Promise<Response | null> {
+  const cacheKey = `${requested}?w=${w}&vid=1`;
+  const cached = await lookupThumb(cacheKey);
+  if (cached) {
+    return new Response(cached as unknown as BodyInit, {
+      headers: { "Content-Type": sniffThumbType(cached), "Cache-Control": "public, max-age=86400" },
+    });
+  }
+  const ff = await findFfmpeg();
+  if (!ff) return null;
+  const tmpFile = path.join(tmpdir(), `seele-thumb-${randomBytes(6).toString("hex")}.jpg`);
+  try {
+    // Extract frame inside the concurrency gate so a grid of 50 videos
+    // doesn't spawn 50 ffmpeg processes at once.
+    await withFfmpegLimit(async () => {
+      const { promise, resolve, reject } = Promise.withResolvers<void>();
+      const proc = execFile(
+        ff,
+        ["-ss", "1", "-i", requested, "-frames:v", "1",
+         "-vf", `scale=${w}:-2`, "-q:v", "3", "-update", "1", "-y", tmpFile],
+        { timeout: 8000, windowsHide: true },
+        (err) => { if (err) reject(err); else resolve(); },
+      );
+      proc.on("error", reject);
+      await promise;
+    });
+    const buf = await fs.promises.readFile(tmpFile);
+    const bytes = new Uint8Array(buf);
+    storeThumb(cacheKey, bytes);
+    return new Response(bytes as unknown as BodyInit, {
+      headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
+    });
+  } catch (e) {
+    if (!app.isPackaged) console.debug("[media] video thumb failed:", e);
+    return null;
+  } finally {
+    fs.promises.unlink(tmpFile).catch(() => {});
+  }
+}
+
+
+/** Downscale `requested` to width `w` and return a Response, or null to
+ *  signal the caller to fall back to the raw stream. Images with an alpha
+ *  channel (transparent PNG/GIF/WebP) are output as PNG to preserve
+ *  transparency; everything else becomes JPEG (smaller, faster). Results
+ *  are cached in the two-tier thumbnail cache (RAM LRU + disk). Replaced
+ *  the old nativeImage path (sync, full-res bitmap decode on the main
+ *  thread → froze the UI on large images). */
 async function serveResized(
   requested: string,
   w: number,
 ): Promise<Response | null> {
   const cacheKey = `${requested}?w=${w}`;
-  const cached = thumbCache.get(cacheKey);
+  const cached = await lookupThumb(cacheKey);
   if (cached) {
-    thumbCache.delete(cacheKey);
-    thumbCache.set(cacheKey, cached); // LRU bump.
     return new Response(cached as unknown as BodyInit, {
       headers: {
-        "Content-Type": "image/jpeg",
+        "Content-Type": sniffThumbType(cached),
         "Cache-Control": "public, max-age=86400",
       },
     });
@@ -216,22 +450,24 @@ async function serveResized(
     if (stat.size > 64 * 1024 * 1024) return null;
     // sharp's streaming decoder never holds the full-res bitmap in JS
     // heap; libvips downsamples on the fly via a pixel pipe.
-    const jpeg = await withSharpLimit(() =>
-      sharp(requested, { sequentialRead: true })
+    // Probe alpha: transparent PNG/GIF/WebP must stay PNG (JPEG has no
+    // alpha channel and would flatten transparency to black). Everything
+    // else becomes JPEG (smaller, faster, mozbetter compression).
+    const meta = await withSharpLimit(() => sharp(requested).metadata());
+    const hasAlpha = meta.hasAlpha ?? false;
+    const bytes = await withSharpLimit(() => {
+      const pipe = sharp(requested, { sequentialRead: true })
         .rotate() // honor EXIF orientation
-        .resize({ width: w, withoutEnlargement: true })
-        .jpeg({ quality: 80, mozjpeg: true })
-        .toBuffer(),
-    );
-    const bytes = new Uint8Array(jpeg);
-    thumbCache.set(cacheKey, bytes);
-    if (thumbCache.size > THUMB_CACHE_MAX) {
-      const oldest = thumbCache.keys().next().value;
-      if (oldest !== undefined) thumbCache.delete(oldest);
-    }
-    return new Response(bytes as unknown as BodyInit, {
+        .resize({ width: w, withoutEnlargement: true });
+      return hasAlpha
+        ? pipe.png({ quality: 80, compressionLevel: 6, palette: false }).toBuffer()
+        : pipe.jpeg({ quality: 80, mozjpeg: true }).toBuffer();
+    });
+    const out = new Uint8Array(bytes);
+    storeThumb(cacheKey, out);
+    return new Response(out as unknown as BodyInit, {
       headers: {
-        "Content-Type": "image/jpeg",
+        "Content-Type": hasAlpha ? "image/png" : "image/jpeg",
         "Cache-Control": "public, max-age=86400",
       },
     });
@@ -257,7 +493,14 @@ app.whenReady().then(() => {
     // when the CWD is on a different drive — strip the leading slash so the
     // absolute path is honored verbatim (v2 review bug #2). On Linux/macOS
     // the leading slash IS the absolute root and must be preserved (V5 SEC-1).
-    const rawPath = decodeURIComponent(url.pathname);
+    let rawPath: string;
+    try {
+      rawPath = decodeURIComponent(url.pathname);
+    } catch {
+      // Malformed percent-encoding — reject instead of throwing inside the
+      // protocol handler.
+      return new Response("Bad Request", { status: 400 });
+    }
     const raw = process.platform === "win32" ? rawPath.replace(/^\//, "") : rawPath;
     const requested = path.resolve(raw);
     if (!path.isAbsolute(requested)) {
@@ -274,10 +517,13 @@ app.whenReady().then(() => {
     const targetWidth = url.searchParams.get("w");
     if (targetWidth) {
       const w = parseInt(targetWidth, 10);
-      // Grid thumbnails (≤512) and viewer preview tier (≤2560) are both
-      // served downscaled; anything else falls through to the raw file.
       if (Number.isFinite(w) && w > 0 && w <= 2560) {
-        const resized = await serveResized(requested, w);
+        // Route videos to ffmpeg frame extraction, images to sharp resize.
+        const ext = path.extname(requested).toLowerCase();
+        const isVideo = FILE_TYPE_BY_EXT[ext] === "video";
+        const resized = isVideo
+          ? await serveVideoThumb(requested, w)
+          : await serveResized(requested, w);
         if (resized) return resized;
       }
     }
@@ -286,6 +532,12 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  // Size the decode semaphores from the persisted settings before the
+  // first thumbnail request arrives (issues.md item 5).
+  applyConcurrencySettings(settingsStore.getSettings());
+  // Bring the disk tier back under budget at startup — the cheapest moment
+  // to pay the walk cost, and it catches whatever grew since last launch.
+  void pruneThumbCache();
 });
 
 /** Build a `file://` URL from an absolute native path.
@@ -305,9 +557,13 @@ function pathToFileUrl(p: string): string {
 }
 app.on("window-all-closed", () => {
   mediaCache.flush();
+  settingsStore.flush();
   if (process.platform !== "darwin") app.quit();
 });
-app.on("before-quit", () => mediaCache.flush());
+app.on("before-quit", () => {
+  mediaCache.flush();
+  settingsStore.flush();
+});
 
 app.on("activate", () => {
   if (mainWindow === null) createWindow();
@@ -380,6 +636,12 @@ ipcMain.handle("scan:start", async (event, folderPath: string) => {
 
   const child = utilityProcess.fork(path.join(__dirname, "scanWorker.js"), [], {
     stdio: "pipe",
+    // libuv's default threadpool is 4 threads; our Phase 2 async pool
+    // dispatches 16 concurrent fs ops, but without a larger threadpool
+    // the OS only services 4 at a time — bottlenecking disk I/O for
+    // large libraries (30k+ files). 16 threads matches the scanner's
+    // concurrency, so stat+probe actually parallelizes.
+    env: { ...process.env, UV_THREADPOOL_SIZE: "16" },
   });
   child.stdout?.on("data", (d: Buffer) =>
     console.log(`[scanWorker] ${d.toString().trimEnd()}`),
@@ -422,6 +684,10 @@ ipcMain.handle("scan:start", async (event, folderPath: string) => {
               birthtimeMs: patch.birthtimeMs,
               birthtime: patch.birthtime,
               dateKey: patch.dateKey,
+              // Persist measured dimensions so the next startup restores
+              // correct masonry aspect ratios without re-probing.
+              width: patch.width ?? collected[idx].width,
+              height: patch.height ?? collected[idx].height,
             };
           }
         }
@@ -460,13 +726,40 @@ ipcMain.handle("scan:cancel", () => {
  * Restore a previously scanned folder instantly from the on-disk cache,
  * without a filesystem walk. The renderer calls this on startup; the user
  * can still re-scan to pick up added/removed/edited files (v4 rework).
+ *
+ * Files removed outside the app (via Explorer, `del`, etc.) would leave
+ * stale entries whose thumbnails 404 → "UNREADABLE". We stat each cached
+ * path and prune the missing ones from both the returned list and the
+ * on-disk cache so the gallery never shows dead entries from a prior
+ * session.
  */
-ipcMain.handle("scan:loadCached", (_e, folderPath: string) => {
+ipcMain.handle("scan:loadCached", async (_e, folderPath: string) => {
   if (typeof folderPath !== "string" || folderPath.length === 0) return [];
   // Whitelist the root so cached thumbnails can load via media://.
   allowedRoots.clear();
   allowedRoots.add(normalizeRoot(folderPath));
-  return mediaCache.loadCachedFiles(folderPath);
+  const cached = mediaCache.loadCachedFiles(folderPath);
+  if (cached.length === 0) return cached;
+  // Batch-check existence. fs.promises.access is cheap per call; for a
+  // 50k-entry library this is ~50k stats, but they run concurrently and
+  // each is sub-millisecond on a local SSD. The alternative — serving a
+  // 404 and letting the tile error out — is strictly worse UX.
+  const checks = await Promise.all(
+    cached.map(async (f) => {
+      try {
+        await fs.promises.access(f.filePath, fs.constants.R_OK);
+        return null;
+      } catch {
+        return f.filePath;
+      }
+    }),
+  );
+  const missing = checks.filter((p): p is string => p !== null);
+  if (missing.length > 0) {
+    mediaCache.removeFiles(missing);
+    return cached.filter((f) => !missing.includes(f.filePath));
+  }
+  return cached;
 });
 
 /** Whether a folder has any cached files (for the startup restore check). */
@@ -513,3 +806,445 @@ ipcMain.handle("shell:openPath", async (_e, filePath: string) => {
 ipcMain.handle("clipboard:writeText", (_e, text: string) => {
   if (typeof text === "string") clipboard.writeText(text);
 });
+
+/* ------------------------------------------------------------------ *
+ *  Settings (performance knobs — issues.md item 6).
+ *  `settings:get` returns the persisted settings plus whether the file
+ *  existed (first launch), so the renderer can adopt the OS-level
+ *  prefers-reduced-motion default. `settings:set` persists a partial
+ *  patch and re-sizes the decode semaphores live.
+ * ------------------------------------------------------------------ */
+
+ipcMain.handle("settings:get", () => settingsStore.loadSettings());
+
+ipcMain.handle("settings:set", (_e, patch: unknown) => {
+  if (!patch || typeof patch !== "object") return settingsStore.getSettings();
+  const p = patch as Partial<settingsStore.AppSettings>;
+  const updated = settingsStore.updateSettings({
+    reduceMotion: p.reduceMotion,
+    dialogBlur: p.dialogBlur,
+    decodeConcurrency: p.decodeConcurrency,
+    overscan: p.overscan,
+  });
+  applyConcurrencySettings(updated);
+  return updated;
+});
+
+/** Inspector insights: content hash, dominant colors, and EXIF camera info. */
+interface FileInsights {
+  hash: string;
+  colors: Array<{ r: number; g: number; b: number; hex: string }>;
+  camera: { make?: string; model?: string; lens?: string; fNumber?: number; iso?: number; exposure?: string };
+}
+
+/** Parse a raw EXIF Buffer (from sharp metadata) into camera fields. */
+function parseExif(buf: Buffer | undefined): FileInsights["camera"] {
+  const cam: FileInsights["camera"] = {};
+  if (!buf || buf.length < 14) return cam;
+  // EXIF text tags are ASCII-null-terminated; extract by tag marker scan.
+  const ascii = (start: number, len: number): string =>
+    buf.toString("latin1", start, start + len).replace(/\0.*$/, "").trim();
+  // Scan for known tag labels in the TIFF/EXIF ASCII entries.
+  const find = (label: string): string | undefined => {
+    const idx = buf.indexOf(label, 12, "latin1");
+    if (idx === -1) return undefined;
+    // The ASCII value follows the 12-byte IFD entry (tag 2 bytes + type 2 + count 4 + value/offset 4).
+    // For long ASCII values the last 4 bytes are an offset; for short ones inline. Scan forward for printable text.
+    for (let p = idx + label.length; p < Math.min(idx + 256, buf.length - 4); p++) {
+      if (buf[p] >= 0x20 && buf[p] < 0x7f) return ascii(p, 64);
+    }
+    return undefined;
+  };
+  cam.make = find("Make");
+  cam.model = find("Model");
+  cam.lens = find("LensModel") ?? find("Lens");
+  // Numeric tags: search for the rational values is complex; do best-effort regex on latin1 dump.
+  const dump = buf.toString("latin1");
+  const grabNum = (re: RegExp): number | undefined => {
+    const m = dump.match(re);
+    return m ? Number(m[1]) : undefined;
+  };
+  cam.fNumber = grabNum(/FNumber[^\d]{0,8}(\d+(?:\.\d+)?)/);
+  cam.iso = grabNum(/ISO[^\d]{0,8}(\d{2,6})/);
+  const expMatch = dump.match(/ExposureTime[^\d]{0,8}(\d+)\/(\d+)/);
+  cam.exposure = expMatch ? `${expMatch[1]}/${expMatch[2]}` : undefined;
+  return cam;
+}
+
+/** Read (or build) a decodeable image buffer for color/EXIF analysis.
+ *  Images: the raw file. Videos: a single ffmpeg-extracted frame.
+ *  Returns null when no decoder is available. */
+async function decodeBufferForInsights(
+  filePath: string,
+): Promise<{ buf: Buffer; meta: Metadata } | null> {
+  const isVideo = /\.(mp4|mov|avi|mkv|webm|m4v|wmv|flv|mpg|mpeg|3gp)$/i.test(filePath);
+  if (!isVideo) {
+    try {
+      // Async read — never block the event loop on a multi-GB original.
+      const buf = await fs.promises.readFile(filePath);
+      // Downscale before computing stats: the 4 sharp .stats() calls in the
+      // insights handler each decode the full-res buffer, pegging CPU and
+      // ballooning RAM on multi-MP originals. A 320px JPEG carries the same
+      // perceptual palette for dominant/quadrant swatches.
+      const preview = await withSharpLimit(() =>
+        sharp(buf).resize({ width: 320, withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer(),
+      );
+      // Metadata must describe the preview, not the original — quadrant
+      // extraction below is done against the preview buffer.
+      const meta = await sharp(preview).metadata();
+      return { buf: preview, meta };
+    } catch {
+      return null;
+    }
+  }
+  // Video: extract one frame at ~1s into a JPEG buffer.
+  const ff = await findFfmpeg();
+  if (!ff) return null;
+  const tmpFile = path.join(tmpdir(), `seele-insight-${randomBytes(6).toString("hex")}.jpg`);
+  try {
+    await withFfmpegLimit(() =>
+      new Promise<void>((resolve, reject) => {
+        const proc = execFile(
+          ff,
+          ["-ss", "1", "-i", filePath, "-frames:v", "1",
+           "-vf", "scale=320:-2", "-q:v", "3", "-update", "1", "-y", tmpFile],
+          { timeout: 8000, windowsHide: true },
+          (err) => { if (err) reject(err); else resolve(); },
+        );
+        proc.on("error", reject);
+      }),
+    );
+    const buf = await fs.promises.readFile(tmpFile);
+    const meta = await sharp(buf).metadata();
+    return { buf, meta };
+  } catch {
+    return null;
+  } finally {
+    fs.promises.unlink(tmpFile).catch(() => {});
+  }
+}
+
+/** Median-cut quantization: repeatedly split the largest-range bucket until `target`
+ *  buckets remain; each bucket's mean becomes a palette color. Buckets are returned
+ *  sorted by population (most prominent first). */
+function medianCutPalette(
+  pixels: Uint8Array,
+  count: number,
+  target: number,
+): Array<{ r: number; g: number; b: number }> {
+  const buckets: number[][] = [Array.from({ length: count }, (_, i) => i)];
+  while (buckets.length < target) {
+    let bestB = -1;
+    let bestRange = -1;
+    let bestChannel = 0;
+    for (let b = 0; b < buckets.length; b++) {
+      const arr = buckets[b];
+      if (arr.length < 2) continue;
+      let minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
+      for (const i of arr) {
+        const r = pixels[i * 3], g = pixels[i * 3 + 1], bl = pixels[i * 3 + 2];
+        if (r < minR) minR = r; if (r > maxR) maxR = r;
+        if (g < minG) minG = g; if (g > maxG) maxG = g;
+        if (bl < minB) minB = bl; if (bl > maxB) maxB = bl;
+      }
+      const rangeR = maxR - minR, rangeG = maxG - minG, rangeB = maxB - minB;
+      let range = rangeR, channel = 0;
+      if (rangeG > range) { range = rangeG; channel = 1; }
+      if (rangeB > range) { range = rangeB; channel = 2; }
+      if (range > bestRange) { bestRange = range; bestB = b; bestChannel = channel; }
+    }
+    if (bestB === -1) break;
+    const arr = buckets[bestB];
+    arr.sort((a, b2) => pixels[a * 3 + bestChannel] - pixels[b2 * 3 + bestChannel]);
+    const mid = arr.length >> 1;
+    buckets.splice(bestB, 1, arr.slice(0, mid), arr.slice(mid));
+  }
+  return buckets
+    .sort((a, b2) => b2.length - a.length)
+    .map((arr) => {
+      let r = 0, g = 0, b = 0;
+      for (const i of arr) { r += pixels[i * 3]; g += pixels[i * 3 + 1]; b += pixels[i * 3 + 2]; }
+      const n = arr.length || 1;
+      return { r: r / n, g: g / n, b: b / n };
+    });
+}
+
+ipcMain.handle("file:insights", async (_e, filePath: string): Promise<FileInsights | null> => {
+  if (typeof filePath !== "string" || filePath.length === 0) return null;
+  if (!isUnderAllowedRoot(path.resolve(filePath))) return null;
+  try {
+    // Partial hash: first 64KB + last 64KB + size. Full-file read of a 2GB
+    // video blocks the event loop and spikes RAM for no perceptual gain.
+    const stat = fs.statSync(filePath);
+    const CHUNK = 64 * 1024;
+    const hasher = createHash("sha1");
+    const fd = fs.openSync(filePath, "r");
+    try {
+      if (stat.size <= CHUNK * 2) {
+        hasher.update(fs.readFileSync(filePath));
+      } else {
+        const head = Buffer.alloc(CHUNK);
+        const tail = Buffer.alloc(CHUNK);
+        fs.readSync(fd, head, 0, CHUNK, 0);
+        fs.readSync(fd, tail, 0, CHUNK, stat.size - CHUNK);
+        hasher.update(head);
+        hasher.update(tail);
+        hasher.update(Buffer.from(`@${stat.size}`));
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    const hash = hasher.digest("hex").slice(0, 16);
+
+    const colors: FileInsights["colors"] = [];
+    const cam: FileInsights["camera"] = {};
+    const decoded = await decodeBufferForInsights(filePath);
+    if (decoded) {
+      const { buf, meta } = decoded;
+      const toHex = (r: number, g: number, b: number) =>
+        `#${[r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
+      // Median-cut palette over a tiny preview. sharp's stats().dominant is a
+      // histogram-weighted mean — on a light photo every region averages out to
+      // the same pale cream, so a real spectrum needs quantization. 48x48 raw
+      // pixels (from the 320px preview buffer) carry plenty of hue detail.
+      try {
+        const raw = await withSharpLimit(() =>
+          sharp(buf)
+            .resize({ width: 48, height: 48, fit: "inside" })
+            .removeAlpha()
+            .flatten({ background: "#000000" })
+            .raw()
+            .toBuffer({ resolveWithObject: true }),
+        );
+        const pal = medianCutPalette(raw.data, raw.info.width * raw.info.height, 6);
+        for (const c of pal) {
+          const rr = Math.round(c.r), gg = Math.round(c.g), bb = Math.round(c.b);
+          colors.push({ r: rr, g: gg, b: bb, hex: toHex(rr, gg, bb) });
+        }
+      } catch {
+        // Fallback: whole-image dominant swatch.
+        try {
+          const d = (await sharp(buf).stats()).dominant;
+          colors.push({ r: d.r, g: d.g, b: d.b, hex: toHex(d.r, d.g, d.b) });
+        } catch { /* best-effort */ }
+      }
+      Object.assign(cam, parseExif(meta.exif));
+    }
+    return { hash, colors, camera: cam };
+  } catch {
+    return null;
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ *  File operations (organize & move) — the core purpose.
+ *  Every path is gated through isUnderAllowedRoot so the renderer can
+ *  never touch files outside the scanned folder.
+ * ------------------------------------------------------------------ */
+
+/** Result of a single file move/rename. */
+interface FileOpResult {
+  filePath: string;
+  ok: boolean;
+  newPath?: string;
+  error?: string;
+}
+
+/**
+ * Move one file to a destination directory. The destination must be
+ * under the allowed root. If a file with the same name exists, a numeric
+ * suffix ` (1)`, ` (2)`, … is appended before the extension.
+ */
+ipcMain.handle(
+  "file:move",
+  async (_e, filePath: string, destDir: string): Promise<FileOpResult> => {
+    const src = path.resolve(filePath);
+    const dest = path.resolve(destDir);
+    if (!isUnderAllowedRoot(src) || !isUnderAllowedRoot(dest)) {
+      return { filePath, ok: false, error: "forbidden" };
+    }
+    try {
+      await fs.promises.mkdir(dest, { recursive: true });
+      const name = path.basename(src);
+      const newPath = await uniquePath(dest, name);
+      await fs.promises.rename(src, newPath);
+      return { filePath, ok: true, newPath };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { filePath, ok: false, error: msg };
+    }
+  },
+);
+
+/**
+ * Move many files to the same destination directory. Returns per-file
+ * results so the renderer can patch its local state incrementally.
+ */
+ipcMain.handle(
+  "file:moveBatch",
+  async (_e, filePaths: string[], destDir: string): Promise<FileOpResult[]> => {
+    const dest = path.resolve(destDir);
+    if (!isUnderAllowedRoot(dest)) {
+      return filePaths.map((filePath) => ({ filePath, ok: false, error: "forbidden" }));
+    }
+    try {
+      await fs.promises.mkdir(dest, { recursive: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return filePaths.map((filePath) => ({ filePath, ok: false, error: msg }));
+    }
+    const results: FileOpResult[] = [];
+    for (const fp of filePaths) {
+      const src = path.resolve(fp);
+      if (!isUnderAllowedRoot(src)) {
+        results.push({ filePath: fp, ok: false, error: "forbidden" });
+        continue;
+      }
+      try {
+        const name = path.basename(src);
+        const newPath = await uniquePath(dest, name);
+        await fs.promises.rename(src, newPath);
+        results.push({ filePath: fp, ok: true, newPath });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        results.push({ filePath: fp, ok: false, error: msg });
+      }
+    }
+    return results;
+  },
+);
+
+/**
+ * Send a file to the OS trash (safe, reversible). Falls back to
+ * `fs.unlink` only if `shell.trashItem` is unavailable.
+ */
+ipcMain.handle(
+  "file:trash",
+  async (_e, filePath: string): Promise<FileOpResult> => {
+    const src = path.resolve(filePath);
+    if (!isUnderAllowedRoot(src)) {
+      return { filePath, ok: false, error: "forbidden" };
+    }
+    try {
+      await shell.trashItem(src);
+      return { filePath, ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { filePath, ok: false, error: msg };
+    }
+  },
+);
+
+/** Trash many files at once. */
+ipcMain.handle(
+  "file:trashBatch",
+  async (_e, filePaths: string[]): Promise<FileOpResult[]> => {
+    const results: FileOpResult[] = [];
+    for (const fp of filePaths) {
+      const src = path.resolve(fp);
+      if (!isUnderAllowedRoot(src)) {
+        results.push({ filePath: fp, ok: false, error: "forbidden" });
+        continue;
+      }
+      try {
+        await shell.trashItem(src);
+        results.push({ filePath: fp, ok: true });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        results.push({ filePath: fp, ok: false, error: msg });
+      }
+    }
+    return results;
+  },
+);
+
+/**
+ * Rename a file in place (same directory, new name).
+ */
+ipcMain.handle(
+  "file:rename",
+  async (_e, filePath: string, newName: string): Promise<FileOpResult> => {
+    const src = path.resolve(filePath);
+    if (!isUnderAllowedRoot(src) || typeof newName !== "string" || newName.length === 0) {
+      return { filePath, ok: false, error: "forbidden" };
+    }
+    // Reject path separators in the new name — it must be a bare filename.
+    if (/[\\/]/.test(newName)) {
+      return { filePath, ok: false, error: "name must not contain path separators" };
+    }
+    try {
+      const dir = path.dirname(src);
+      const newPath = await uniquePath(dir, newName);
+      await fs.promises.rename(src, newPath);
+      return { filePath, ok: true, newPath };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { filePath, ok: false, error: msg };
+    }
+  },
+);
+
+/**
+ * Create a new folder (intermediates as needed) under the allowed root.
+ */
+ipcMain.handle(
+  "folder:create",
+ async (_e, dirPath: string): Promise<{ ok: boolean; error?: string }> => {
+    const dir = path.resolve(dirPath);
+    if (!isUnderAllowedRoot(dir)) return { ok: false, error: "forbidden" };
+    try {
+      await fs.promises.mkdir(dir, { recursive: true });
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
+    }
+  },
+);
+
+/**
+ * Open a native folder picker scoped to the allowed root so the user
+ * can choose a move destination. Returns the chosen path or null.
+ */
+ipcMain.handle(
+  "dialog:pickMoveTarget",
+  async (_e, defaultPath?: string): Promise<string | null> => {
+    if (!mainWindow) return null;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ["openDirectory", "createDirectory"],
+      defaultPath: defaultPath && isUnderAllowedRoot(path.resolve(defaultPath))
+        ? defaultPath
+        : undefined,
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    const picked = result.filePaths[0];
+    // Allow picking inside or creating under the root, but warn if outside.
+    return picked;
+  },
+);
+
+/**
+ * Resolve a non-colliding path in `dir` for the given `name`. If
+ * `name.ext` exists, tries `name (1).ext`, `name (2).ext`, etc.
+ */
+async function uniquePath(dir: string, name: string): Promise<string> {
+  const candidate = path.join(dir, name);
+  try {
+    await fs.promises.access(candidate);
+    // Exists — find a suffix.
+  } catch {
+    return candidate; // Doesn't exist — use as-is.
+  }
+  const ext = path.extname(name);
+  const base = path.basename(name, ext);
+  for (let i = 1; i < 10000; i++) {
+    const suffixed = path.join(dir, `${base} (${i})${ext}`);
+    try {
+      await fs.promises.access(suffixed);
+    } catch {
+      return suffixed;
+    }
+  }
+  // Fallback — append a timestamp.
+  return path.join(dir, `${base} (${Date.now()})${ext}`);
+}

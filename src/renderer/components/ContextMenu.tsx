@@ -79,7 +79,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   return (
     <div
       ref={ref}
-      className="fixed z-[60] min-w-[180px] bg-nerv-panel border border-nerv-orange/40 shadow-[0_0_20px_rgba(255,85,0,0.25)] py-1 font-mono text-xs select-none"
+      className="fixed z-[60] min-w-[180px] bg-nerv-panel border border-nerv-orange/40 shadow-[0_0_20px_rgba(255,152,48,0.25)] py-1 font-mono text-xs select-none"
       style={{ left: `${clamped.x}px`, top: `${clamped.y}px` }}
     >
       {items.map((item) =>

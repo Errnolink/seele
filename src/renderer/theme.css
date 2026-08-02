@@ -1,45 +1,102 @@
 @import "tailwindcss";
 
 /* =========================================================================
- *  NERV × Cyberpunk theme  (Tailwind v4 CSS-first config)
+ *  NERV × Cyberpunk — EVA-ticket UI  (Tailwind v4 CSS-first config)
  *
- *  Translates the project's nerv.* palette + fonts + animations into
- *  @theme tokens. Tailwind v4 auto-generates utilities from these:
- *    --color-nerv-orange      -> bg-nerv-orange / text-nerv-orange / border-nerv-orange
- *    --font-display           -> font-display
- *    --animate-scanline       -> animate-scanline
+ *  v2.6 redesign. Translates the project's nerv.* palette + fonts +
+ *  animations into @theme tokens. Tailwind v4 auto-generates utilities
+ *  from these:
+ *    --color-nerv-orange      -> bg-nerv-orange / text-nerv-orange / ...
+ *    --font-mono              -> font-mono
+ *    --animate-pulse-soft     -> animate-pulse-soft
  *  Opacity modifiers (bg-nerv-orange/30) work because these are real colors.
  * ========================================================================= */
 
 @theme {
-  /* ---- palette ---- */
-  --color-nerv-bg: #0a0a0c; /* deep tactical black */
-  --color-nerv-panel: #14151c; /* gunmetal container background */
-  --color-nerv-panel-2: #1c1d26; /* raised panel */
-  --color-nerv-border: #2a2b36; /* default hairline */
-  --color-nerv-orange: #ff5500; /* NERV emergency orange */
-  --color-nerv-amber: #ffaa00; /* warning text */
-  --color-nerv-cyan: #00f0ff; /* cyberpunk active state */
-  --color-nerv-green: #39ff14; /* cyberpunk terminal green */
-  --color-nerv-text: #e6edf3; /* primary text */
-  --color-nerv-muted: #6b7280; /* secondary text */
+  /* ---- palette (v2.5 NERV-accurate, §2.1) ---- */
+  /* Void & Panels */
+  --color-nerv-bg: #000000;          /* True NERV black background */
+  --color-nerv-panel: #0a0a0c;       /* Secondary dark panel */
+  --color-nerv-panel-2: #121214;     /* Raised surface / input background */
+  --color-nerv-border: #1f1f23;      /* Hairline borders */
+  --color-nerv-border-highlight: #2e2e34; /* Active / hover border */
 
-  /* ---- typography ---- */
-  --font-mono: "JetBrains Mono", "Share Tech Mono", ui-monospace, "Cascadia Code",
-    Consolas, monospace;
-  --font-display: "Orbitron", "JetBrains Mono", system-ui, sans-serif;
+  /* Functional NERV Palette — one role per hue */
+  --color-nerv-orange: #ff9830;      /* Primary labels, active highlights, command accents */
+  --color-nerv-orange-glow: rgba(255, 152, 48, 0.25); /* glow shadow */
+  --color-nerv-orange-hot: #ffcc50;  /* Bright orange highlight */
+  --color-nerv-orange-dim: #c87020;  /* Muted orange border/text */
+  --color-nerv-green: #50ff50;       /* Nominal data, success, video badge */
+  --color-nerv-green-dim: #30bb30;   /* Muted green */
+  --color-nerv-cyan: #20f0ff;        /* Resolution, image badge */
+  --color-nerv-cyan-dim: #10a0b0;    /* Muted cyan */
+  --color-nerv-red: #ff3030;         /* Emergency / purge / destructive */
+  --color-nerv-amber: #ffb700;       /* Priority starred, warning badges */
+  --color-nerv-purple: #7c3aed;      /* EVA chrome (header, sidebar frame) */
+  --color-nerv-magenta: #ff4fd8;     /* RAW sensor frames badge */
+  --color-nerv-lime: #a3e635;        /* EVA phosphor text */
+  --color-nerv-text: #e8e8e4;        /* Primary readable text */
+  --color-nerv-text-dim: #8a8a85;    /* Secondary text */
+  --color-nerv-muted: #6a6a65;       /* Low-contrast labels (lightened from spec #565650 for AA readability) */
 
-  /* ---- custom keyframe animations ---- */
+  /* ---- typography (§2.2) ---- */
+  --font-display: "Noto Serif Display", serif; /* Heavy serif for EVA title cards */
+  --font-mono: "JetBrains Mono", ui-monospace, monospace; /* Data readouts & UI text */
+  --font-jp: "Shippori Mincho B1", serif; /* Institutional Japanese subtitles */
+
+  /* ---- animations ---- */
+  --animate-pulse-soft: pulse-soft 2.5s ease-in-out infinite;
+  --animate-glow-orange: glow-orange 2.5s ease-in-out infinite;
   --animate-scanline: scanline 4s linear infinite;
-  --animate-pulse-glow: pulse-glow 1.6s ease-in-out infinite;
-  --animate-blink: blink 1s steps(2, start) infinite;
   --animate-boot-glitch: matrix-glitch 0.5s steps(3, end);
   --animate-scanline-bar: scanline-bar 1.4s ease-in-out infinite;
-  --animate-nerv-shimmer: nerv-shimmer 1.8s ease-in-out infinite;
-  --animate-viewer-enter: viewer-enter 0.2s ease-out;
+  --animate-pulse: pulse-soft 2s ease-in-out infinite;
 }
 
 /* ---- keyframes ---- */
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes glow-orange {
+  0%,
+  100% {
+    box-shadow: 0 0 12px rgba(255, 85, 0, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 24px rgba(255, 85, 0, 0.45);
+  }
+}
+
+/* Skeleton shimmer sweep (§4) — used by .shimmer in index.css */
+@keyframes shimmer-sweep {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* Cheap opacity-pulse shimmer — GPU-composited, no repaint. Used when
+   reduce-motion is active or the OS requests reduced motion (issues.md
+   item 2 — the gradient sweep repaints on every tile). */
+@keyframes shimmer-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
 @keyframes scanline {
   0% {
     transform: translateY(-100%);
@@ -77,51 +134,11 @@
   }
 }
 
-@keyframes pulse-glow {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(255, 85, 0, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 8px 2px rgba(255, 85, 0, 0.6);
-  }
-}
-
-@keyframes blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.2;
-  }
-}
-
 @keyframes scanline-bar {
   0% {
     transform: translateX(-100%);
   }
   100% {
     transform: translateX(400%);
-  }
-}
-
-@keyframes nerv-shimmer {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
-}
-
-@keyframes viewer-enter {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
   }
 }

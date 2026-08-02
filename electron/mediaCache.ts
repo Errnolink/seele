@@ -130,6 +130,23 @@ export function recordScanResult(folderPath: string, files: MediaFile[]): void {
   scheduleFlush();
 }
 
+/** Remove specific file paths from the cache. Used when externally-deleted
+ *  files are detected during cache restore — the on-disk list goes stale
+ *  between sessions when files are removed outside the app (Explorer, etc.). */
+export function removeFiles(filePaths: string[]): void {
+  if (filePaths.length === 0) return;
+  load();
+  const remove = new Set(filePaths);
+  const before = cache.files.length;
+  cache.files = cache.files.filter((f) => !remove.has(f.filePath));
+  for (const p of remove) delete cache.dims[p];
+  if (cache.files.length !== before) {
+    rebuildIndex();
+    dirty = true;
+    scheduleFlush();
+  }
+}
+
 /**
  * Merge measured dimensions from the renderer into the cache (v4 rework).
  * Uses the persistent `fileIndexByPath` map for O(1) lookup instead of

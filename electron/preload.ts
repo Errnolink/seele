@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { MediaFile, MetaPatch, ScanProgress } from "../src/scanner/types";
+import type { AppSettings } from "./settings";
 /** Tracks the previous scan's listener cleanup so a new scan removes them (v4 H-1). */
 let activeScanCleanup: (() => void) | null = null;
 
@@ -81,6 +82,34 @@ export interface ScanAPI {
   openPath(filePath: string): Promise<string>;
   /** Copy text to the system clipboard (v3 review #13). */
   writeClipboard(text: string): Promise<void>;
+  /** Hash + dominant colors + EXIF camera info for the inspector panel. */
+  getFileInsights(filePath: string): Promise<{
+    hash: string;
+    colors: Array<{ r: number; g: number; b: number; hex: string }>;
+    camera: { make?: string; model?: string; lens?: string; fNumber?: number; iso?: number; exposure?: string };
+  } | null>;
+
+  // ── File operations (organize & move) ──
+
+  /** Result of a single file operation. */
+  moveFile(filePath: string, destDir: string): Promise<{ filePath: string; ok: boolean; newPath?: string; error?: string }>;
+  moveFiles(filePaths: string[], destDir: string): Promise<Array<{ filePath: string; ok: boolean; newPath?: string; error?: string }>>;
+  trashFile(filePath: string): Promise<{ filePath: string; ok: boolean; error?: string }>;
+  trashFiles(filePaths: string[]): Promise<Array<{ filePath: string; ok: boolean; error?: string }>>;
+  renameFile(filePath: string, newName: string): Promise<{ filePath: string; ok: boolean; newPath?: string; error?: string }>;
+  createFolder(dirPath: string): Promise<{ ok: boolean; error?: string }>;
+  pickMoveTarget(defaultPath?: string): Promise<string | null>;
+
+  // ── Window controls (custom titlebar) ──
+  winMinimize(): void;
+  winMaximize(): void;
+  winClose(): void;
+
+  // ── Settings (performance knobs — issues.md item 6) ──
+  /** Read the persisted settings. `exists: false` on first launch. */
+  getSettings(): Promise<{ settings: AppSettings; exists: boolean }>;
+  /** Persist a partial patch; resolves with the merged settings. */
+  setSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
 }
 
 const api: ScanAPI = {
@@ -146,10 +175,29 @@ const api: ScanAPI = {
     entries: { filePath: string; width: number; height: number }[],
   ) => ipcRenderer.invoke("scan:saveDimensions", entries),
 
-  // Context-menu actions (v3 review #13).
+  // Context-menu / shell actions.
   showItemInFolder: (filePath) => ipcRenderer.invoke("shell:showItemInFolder", filePath),
+  getFileInsights: (filePath) => ipcRenderer.invoke("file:insights", filePath),
   openPath: (filePath) => ipcRenderer.invoke("shell:openPath", filePath),
   writeClipboard: (text) => ipcRenderer.invoke("clipboard:writeText", text),
+
+  // File operations (organize & move).
+  moveFile: (filePath, destDir) => ipcRenderer.invoke("file:move", filePath, destDir),
+  moveFiles: (filePaths, destDir) => ipcRenderer.invoke("file:moveBatch", filePaths, destDir),
+  trashFile: (filePath) => ipcRenderer.invoke("file:trash", filePath),
+  trashFiles: (filePaths) => ipcRenderer.invoke("file:trashBatch", filePaths),
+  renameFile: (filePath, newName) => ipcRenderer.invoke("file:rename", filePath, newName),
+  createFolder: (dirPath) => ipcRenderer.invoke("folder:create", dirPath),
+  pickMoveTarget: (defaultPath) => ipcRenderer.invoke("dialog:pickMoveTarget", defaultPath),
+
+  // Window controls (custom titlebar).
+  winMinimize: () => ipcRenderer.send("win:minimize"),
+  winMaximize: () => ipcRenderer.send("win:maximize"),
+  winClose: () => ipcRenderer.send("win:close"),
+
+  // Settings (performance knobs).
+  getSettings: () => ipcRenderer.invoke("settings:get"),
+  setSettings: (patch) => ipcRenderer.invoke("settings:set", patch),
 };
 
 contextBridge.exposeInMainWorld("scanAPI", api);
