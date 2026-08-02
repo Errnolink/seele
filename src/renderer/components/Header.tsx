@@ -201,7 +201,7 @@ export function Header(props: HeaderProps) {
     <header className="relative shrink-0 z-30 select-none">
       {/* Row 1 — titlebar drag region; 160px clears Windows caption buttons. */}
       <div
-        className="titlebar-drag eva-top-bar h-12 px-3 flex items-center justify-between border-b border-nerv-purple/40 gap-3"
+        className="titlebar-drag h-12 px-3 flex items-center justify-between border-b border-nerv-border/60 gap-3"
       >
         {/* Left cluster: sidebar toggle + brand + folder + scan */}
         <div className="flex items-center gap-3 min-w-0">
@@ -214,119 +214,64 @@ export function Header(props: HeaderProps) {
             aria-pressed={sidebarOpen}
             className={`no-drag shrink-0 w-8 h-8 flex items-center justify-center text-sm font-bold transition-colors ${
               sidebarOpen
-                ? "bg-nerv-lime text-[#1a3205] shadow-[0_0_8px_rgba(163,230,53,0.35)]"
-                : "border border-[rgba(124,58,237,0.5)] bg-[#100e18] text-[#c4b5fd] hover:border-nerv-lime hover:text-nerv-lime"
+                ? "bg-nerv-amber text-black shadow-[0_0_8px_rgba(255,183,0,0.35)]"
+                : "border border-nerv-border bg-nerv-panel text-nerv-text-dim hover:border-nerv-amber hover:text-nerv-amber"
             }`}
           >
             {sidebarOpen ? "\u2039" : "\u203A"}
           </button>
 
-          {/* Brand block */}
-          <div className="shrink-0 flex items-center gap-2 pr-3 border-r border-nerv-purple/40">
-            <div className="relative w-8 h-8 eva-corner bg-[#6d28d9] flex items-center justify-center">
-              <span className="text-[15px] font-bold text-nerv-lime leading-none">
-                W
-              </span>
-              <span className="absolute right-0 top-0 bottom-0 w-[3px] bg-nerv-lime/70" />
-            </div>
-            <div className="flex flex-col leading-none">
-              <div className="flex items-center gap-1.5">
-                <span className="eva-title text-[15px] phosphor-lime">
-                  WIERGISE
-                </span>
-                <span className="eva-cut bg-[rgba(124,58,237,0.25)] text-[#c4b5fd] text-[9px] font-bold tracking-[0.15em] px-1.5 py-0.5">
-                  v2.5
-                </span>
-              </div>
-              <span className="text-[9px] phosphor-violet tracking-[0.3em] mt-0.5">
-                UNIT-01 // MEDIA SCANNER
-              </span>
-            </div>
+          {/* Brand block — plain amber wordmark, no gradient icon */}
+          <div className="shrink-0 flex items-center gap-2 pr-3 border-r border-nerv-border/60">
+            <span className="eva-title text-[16px] text-nerv-amber">Wiergise</span>
+            <span className="text-[9px] text-nerv-muted">v2.5</span>
           </div>
 
-          {/* Folder breadcrumb */}
+          {/* Folder pill — terse "ROOT" label, neutral styling */}
           <button
             type="button"
             onClick={onPickFolder}
             title={currentFolder ?? "Pick a folder to scan"}
-            className="no-drag shrink-0 eva-ticket bg-[rgba(124,58,237,0.12)] hover:bg-[rgba(124,58,237,0.22)] transition-colors h-8 px-3 flex items-center gap-2 max-w-[260px]"
+            className="no-drag shrink-0 h-8 px-3 flex items-center gap-1.5 text-[11px] text-nerv-text-dim hover:text-nerv-amber transition-colors max-w-[200px]"
           >
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              className="phosphor-violet shrink-0"
-            >
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0 text-nerv-amber">
+              <path d="M3 7a2 2 0 0 1 2-2h3l2 2h4a2 2 0 0 1 2 2v1" />
+              <rect x="3" y="9" width="18" height="11" />
             </svg>
-            <span className="phosphor-violet text-[11px] font-bold tracking-[0.1em] truncate">
-              {folderLabel.toUpperCase()}
-            </span>
-            <span className="text-[9px] font-bold tracking-[0.2em] phosphor-dim group-hover:phosphor-lime">
-              [ CHG ]
-            </span>
+            <span className="truncate">{folderLabel.toUpperCase()}</span>
           </button>
 
-          {/* Scan button */}
+          {/* Scan button — terse "Scan" */}
           <button
             type="button"
             onClick={onScan}
             disabled={scanning}
             title={scanning ? "Scanning in progress" : "Initiate media scan"}
-            className={`no-drag shrink-0 eva-ticket h-8 px-3 flex items-center gap-1.5 text-[10px] font-bold tracking-[0.2em] uppercase transition-[filter] duration-150 ${
+            className={`no-drag shrink-0 eva-shear h-8 px-4 flex items-center gap-1.5 text-[11px] font-bold tracking-wider transition-all ${
               scanning
                 ? "bg-[#33230a] text-[#ffb020] animate-pulse cursor-wait"
-                : "eva-fill-amber hover:brightness-110"
+                : "bg-nerv-orange text-black hover:brightness-110"
             }`}
           >
             {scanning ? (
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2.5}
-                className="animate-spin"
-              >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="animate-spin">
                 <path d="M21 12a9 9 0 1 1-6.219-8.56" />
               </svg>
             ) : (
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2.5}
-              >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16" />
               </svg>
             )}
-            {scanning ? "SCANNING" : "INITIATE SCAN"}
+            {scanning ? "Scanning" : "Scan"}
           </button>
         </div>
 
         {/* Right cluster: search + tools + clock */}
         <div className="flex items-center gap-3 min-w-0">
           {/* Global search */}
-          <div className="flex-1 max-w-xl min-w-0">
-            <div className="eva-corner eva-segbar border border-nerv-purple/40 h-8 px-2.5 flex items-center gap-2 bg-[#0a0814]">
-              <span className="phosphor-lime font-bold text-xs select-none">
-                {">"}
-              </span>
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                className="phosphor-violet/70 shrink-0"
-              >
+          <div className="flex-1 max-w-md min-w-0">
+            <div className="flex items-center gap-2 h-8 bg-nerv-bg border border-nerv-border focus-within:border-nerv-amber/60 px-3 transition-colors">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-nerv-amber shrink-0">
                 <circle cx="11" cy="11" r="7" />
                 <path d="M21 21l-4.3-4.3" />
               </svg>
@@ -334,18 +279,19 @@ export function Header(props: HeaderProps) {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => onSearchChange(e.target.value)}
-                placeholder="QUERY.FILENAME // TAG // EXT"
+                placeholder="Search"
                 spellCheck={false}
-                className="no-drag flex-1 min-w-0 bg-transparent outline-none phosphor-lime text-[11px] tracking-[0.08em] placeholder:text-[#6d5a9a]"
+                className="no-drag flex-1 min-w-0 bg-transparent outline-none text-[11px] text-nerv-text placeholder:text-nerv-muted"
               />
-              {searchQuery.trim().length > 0 && (
-                <span className="phosphor-amber text-[10px] font-bold tabular-nums shrink-0">
-                  {pad(resultCount, 4)}
+              {searchQuery.trim().length > 0 ? (
+                <button type="button" onClick={() => onSearchChange("")} className="text-nerv-muted hover:text-nerv-text shrink-0">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                </button>
+              ) : (
+                <span className="no-drag border border-nerv-border px-1.5 py-0.5 text-[9px] text-nerv-muted cursor-pointer" onClick={onOpenPalette}>
+                  &#8984;K
                 </span>
               )}
-              <span className="no-drag eva-ticket bg-[rgba(124,58,237,0.25)] text-[#c4b5fd] text-[9px] font-bold tracking-[0.15em] px-1.5 py-0.5 shrink-0">
-                &#8984;K
-              </span>
             </div>
           </div>
 
@@ -355,36 +301,21 @@ export function Header(props: HeaderProps) {
               type="button"
               onClick={onOpenAnalytics}
               title="Storage & media analytics"
-              className="no-drag eva-ticket bg-[rgba(124,58,237,0.18)] hover:bg-[rgba(124,58,237,0.32)] hover:text-nerv-lime text-[#c4b5fd] h-8 px-2.5 flex items-center gap-1.5 text-[10px] font-bold tracking-[0.15em] transition-colors"
+              className="no-drag text-nerv-text-dim hover:text-nerv-amber h-8 w-8 flex items-center justify-center transition-colors"
             >
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M3 3v18h18" />
                 <path d="M7 14l4-4 3 3 5-6" />
               </svg>
-              ANALYTICS
             </button>
             <button
               type="button"
               onClick={onOpenPalette}
               title="Command palette"
               aria-label="Command palette"
-              className="no-drag eva-sqbtn w-8 h-8 flex items-center justify-center"
+              className="no-drag text-nerv-text-dim hover:text-nerv-amber h-8 w-8 flex items-center justify-center transition-colors"
             >
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M4 17l6-6-6-6M12 19h8" />
               </svg>
             </button>
@@ -393,16 +324,9 @@ export function Header(props: HeaderProps) {
               onClick={onOpenHelp}
               title="Keyboard help"
               aria-label="Keyboard help"
-              className="no-drag eva-sqbtn w-8 h-8 flex items-center justify-center"
+              className="no-drag text-nerv-text-dim hover:text-nerv-amber h-8 w-8 flex items-center justify-center transition-colors"
             >
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="12" r="9" />
                 <path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4M12 17h.01" />
               </svg>
@@ -410,8 +334,8 @@ export function Header(props: HeaderProps) {
 
             {/* Live clock */}
             <div className="flex items-center gap-1.5 pl-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-nerv-lime shadow-[0_0_8px_#c9e98a] animate-pulse-soft" />
-              <span className="phosphor-lime text-[12px] font-bold tabular-nums tracking-[0.1em]">
+              <span className="w-1.5 h-1.5 bg-nerv-amber shadow-[0_0_8px_#ffb700] animate-pulse-soft" />
+              <span className="text-nerv-amber text-[12px] font-bold tabular-nums tracking-wider">
                 {formatClock(now)}
               </span>
             </div>
@@ -419,19 +343,17 @@ export function Header(props: HeaderProps) {
         </div>
       </div>
 
-      {/* Row 2 — control strip (wraps to multiple lines on narrow windows) */}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2 border-b border-nerv-border/60 bg-gradient-to-b from-[#0d0b08] to-[#0a0908]">
+      {/* Row 2 — single control strip: VIEW | FILTER | GROUP | SORT | STAR | SIZE | RESULT */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-1.5 border-b border-nerv-border/60">
         <EvaSegmented
-          label="VIEW"
           value={viewMode}
           options={VIEW_OPTIONS}
           onChange={onViewModeChange}
-          accent="lime"
+          accent="amber"
         />
         <span className="eva-divider" />
 
         <EvaSegmented
-          label="FILTER"
           value={typeFilter}
           options={FILTER_OPTIONS}
           onChange={onTypeFilterChange}
@@ -440,20 +362,18 @@ export function Header(props: HeaderProps) {
         <span className="eva-divider" />
 
         <EvaSegmented
-          label="GROUP"
           value={groupMode}
           options={GROUP_OPTIONS}
           onChange={onGroupModeChange}
-          accent="purple"
+          accent="amber"
         />
         <span className="eva-divider" />
 
         <EvaSegmented
-          label="SORT"
           value={sortMode}
           options={SORT_OPTIONS}
           onChange={onSortModeChange}
-          accent="cyan"
+          accent="amber"
         />
 
         {/* Sort direction */}
@@ -471,52 +391,37 @@ export function Header(props: HeaderProps) {
 
         <span className="eva-divider" />
 
-        {/* SIZE readout — hidden in list/folders modes */}
+        {/* SIZE — hidden in list/folders modes */}
         {viewMode !== "list" && viewMode !== "folders" && (
-          <div className="eva-frame">
-            <div className="eva-inner h-7 px-2.5 flex items-center gap-2 bg-[#0a0908]">
-              <span className="text-[9px] font-bold tracking-[0.25em] phosphor-dim">
-                SIZE
-              </span>
-              <input
-                type="range"
-                min={130}
-                max={360}
-                step={1}
-                value={gridDensity}
-                onChange={(e) => onGridDensityChange(Number(e.target.value))}
-                className="eva-slider w-24"
-                aria-label="Grid tile size"
-              />
-              <span className="phosphor-amber text-[10px] font-bold tabular-nums w-9 text-right">
-                {gridDensity}px
-              </span>
-            </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] font-bold tracking-widest text-nerv-muted">SIZE</span>
+            <input
+              type="range"
+              min={130}
+              max={360}
+              step={1}
+              value={gridDensity}
+              onChange={(e) => onGridDensityChange(Number(e.target.value))}
+              className="eva-slider w-20"
+              aria-label="Grid tile size"
+            />
+            <span className="text-nerv-amber text-[10px] font-bold tabular-nums w-9 text-right">
+              {gridDensity}px
+            </span>
           </div>
         )}
 
-        {/* Spacer pushes RESULT to the right when there's room */}
+        {/* Spacer */}
         <div className="flex-1 min-w-0" />
 
-        {/* RESULT readout */}
-        <div className="eva-frame">
-          <div className="eva-inner h-7 px-3 flex items-center gap-2 bg-[#0a0908]">
-            <span className="text-[9px] font-bold tracking-[0.25em] phosphor-dim">
-              RESULT
-            </span>
-            <span className="phosphor-amber text-[11px] font-bold tabular-nums">
-              {pad(resultCount, 4)}
-            </span>
-            <span className="phosphor-dim text-[10px]">/</span>
-            <span className="phosphor-dim text-[11px] font-bold tabular-nums">
-              {pad(totalCount, 4)}
-            </span>
-            {selectedCount > 0 && (
-              <span className="phosphor-lime text-[10px] font-bold tabular-nums ml-1 px-1.5 border border-nerv-lime/40">
-                {pad(selectedCount, 3)} SEL
-              </span>
-            )}
-          </div>
+        {/* RESULT — plain text, no box */}
+        <div className="flex items-center gap-1.5 text-[11px] tabular-nums">
+          <span className="text-nerv-text font-bold">{pad(resultCount, 4)}</span>
+          <span className="text-nerv-muted">of</span>
+          <span className="text-nerv-muted font-bold">{pad(totalCount, 4)}</span>
+          {selectedCount > 0 && (
+            <span className="text-nerv-amber font-bold ml-2">{pad(selectedCount, 3)} sel</span>
+          )}
         </div>
       </div>
     </header>

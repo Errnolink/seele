@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
 import { MasonryGrid } from "./components/MasonryGrid";
@@ -146,6 +146,20 @@ export default function App() {
   const [sortMode, setSortMode] = useState<SortMode>("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [gridDensity, setGridDensity] = useState(180);
+  // Slider ticks each re-pack the whole masonry grid (O(N) per tick). The
+  // deferred value coalesces intermediate positions so the pack recomputes
+  // at most once per frame while the label still updates live.
+  const packedDensity = useDeferredValue(gridDensity);
+  /** Folders hidden from the grid via context menu (subtree match). */
+  const [hiddenFolders, setHiddenFolders] = useState<Set<string>>(new Set());
+  const toggleHideFolder = useCallback((folderPath: string) => {
+    setHiddenFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderPath)) next.delete(folderPath);
+      else next.add(folderPath);
+      return next;
+    });
+  }, []);
 
   // ---- selection + favorites ----
   const [selectedIds, setSelectedIds] = useState<Set<MediaId>>(new Set());
@@ -159,6 +173,11 @@ export default function App() {
   );
   const [contextMenu, setContextMenu] = useState<{
     file: MediaFile;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [folderContextMenu, setFolderContextMenu] = useState<{
+    folderPath: string;
     x: number;
     y: number;
   } | null>(null);
@@ -212,6 +231,8 @@ export default function App() {
     if (!folder) return;
     void window.scanAPI.loadCachedFiles(folder).then((cached) => {
       if (cached.length > 0) onRestore(cached);
+    }).catch(() => {
+      /* cache restore is best-effort — scan will fill in */
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -219,16 +240,21 @@ export default function App() {
 
   // ---- scan actions ----
   const pickFolder = useCallback(async () => {
-    const picked = await window.scanAPI.selectFolder();
-    if (picked) {
-      setFolder(picked);
-      localStorage.setItem("wiergise:lastFolder", picked);
-      setSelectedFolder(null);
-      onReset();
-      const cached = await window.scanAPI.loadCachedFiles(picked);
-      if (cached.length > 0) onRestore(cached);
+    try {
+      const picked = await window.scanAPI.selectFolder();
+      if (picked) {
+        setFolder(picked);
+        localStorage.setItem("wiergise:lastFolder", picked);
+        setSelectedFolder(null);
+        onReset();
+        const cached = await window.scanAPI.loadCachedFiles(picked);
+        if (cached.length > 0) onRestore(cached);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      onError(message);
     }
-  }, [onReset, onRestore]);
+  }, [onReset, onRestore, onError]);
 
   const startScan = useCallback(async () => {
     if (!folder) return;
@@ -290,6 +316,8 @@ export default function App() {
         onReset();
         void window.scanAPI.loadCachedFiles(droppedPath).then((cached) => {
           if (cached.length > 0) onRestore(cached);
+        }).catch(() => {
+          /* best-effort restore */
         });
       }
     },
@@ -593,10 +621,13 @@ export default function App() {
   }, [pickFolder, startScan, clearSelection]);
 
   // ---- derived data pipeline (§10) ----
+  // useTags() returns a fresh object every render, but its fields are
+  // referentially stable — destructure so the memo deps stay granular.
+  const { activeTags, getFileTags } = tagSystem;
   const { derivedFiles, groups, resultCount } = useMemo(() => {
     const allFiles = files;
 
-    // 1. Folder filter
+    // 1. Folder filter — restrict to selectedFolder subtree (if any).
     let folderFiltered = allFiles;
     if (selectedFolder !== null) {
       const normSel = selectedFolder.replace(/\\/g, "/").toLowerCase();
@@ -606,16 +637,31 @@ export default function App() {
       );
     }
 
+    // 1b. Hidden-folder filter — exclude files whose path falls under any
+    // hidden folder (subtree match, case-insensitive).
+    let visibleFiles = folderFiltered;
+    if (hiddenFolders.size > 0) {
+      const hiddenNorms = [...hiddenFolders].map((h) =>
+        h.replace(/\\/g, "/").toLowerCase(),
+      );
+      visibleFiles = folderFiltered.filter(
+        (f) => !hiddenNorms.some((h) => {
+          const prefix = h.endsWith("/") ? h : h + "/";
+          return f.normPath === h || f.normPath.startsWith(prefix);
+        }),
+      );
+    }
+
     // 2. Type / favorite / large filter (§10.2 ii)
-    let typeFiltered = folderFiltered;
+    let typeFiltered = visibleFiles;
     if (typeFilter === "image") {
-      typeFiltered = folderFiltered.filter((f) => f.fileType === "image");
+      typeFiltered = visibleFiles.filter((f) => f.fileType === "image");
     } else if (typeFilter === "video") {
-      typeFiltered = folderFiltered.filter((f) => f.fileType === "video");
+      typeFiltered = visibleFiles.filter((f) => f.fileType === "video");
     } else if (typeFilter === "favorite") {
-      typeFiltered = folderFiltered.filter((f) => favorites.has(f.filePath));
+      typeFiltered = visibleFiles.filter((f) => favorites.has(f.filePath));
     } else if (typeFilter === "large") {
-      typeFiltered = folderFiltered.filter(
+      typeFiltered = visibleFiles.filter(
         (f) => f.sizeBytes > LARGE_FILE_BYTES,
       );
     }
@@ -629,10 +675,10 @@ export default function App() {
 
     // 3.5. Tag filter (v2.5) — only files that have at least one active tag.
     let tagFiltered = searchFiltered;
-    if (tagSystem.activeTags.size > 0) {
+    if (activeTags.size > 0) {
       tagFiltered = searchFiltered.filter((f) => {
-        const assigned = tagSystem.getFileTags(f.filePath);
-        return assigned.some((t) => tagSystem.activeTags.has(t.key));
+        const assigned = getFileTags(f.filePath);
+        return assigned.some((t) => activeTags.has(t.key));
       });
     }
 
@@ -707,7 +753,7 @@ export default function App() {
       groups: outGroups,
       resultCount: filteredCount,
     };
-  }, [files, selectedFolder, typeFilter, typeFilter === "favorite" ? favorites : null, debouncedQuery, groupMode, sortMode, sortDir, tagSystem.activeTags, tagSystem.filterByTags]);
+  }, [files, selectedFolder, hiddenFolders, typeFilter, favorites, debouncedQuery, groupMode, sortMode, sortDir, activeTags, getFileTags]);
 
   // Keep a live ref of derivedFiles for the viewer navigation handler.
   // (derivedFilesRef itself is declared alongside the handlers above.)
@@ -751,9 +797,14 @@ export default function App() {
     return { totalFiles: files.length, imageCount, videoCount, totalSizeBytes };
   }, [files]);
 
+  // Defer the folder-tree rebuild while batches stream in during a scan:
+  // rebuilding the full hierarchy on every batch (hundreds per scan) was
+  // re-deriving everything each time. The deferred value drops intermediate
+  // states and keeps the tree one commit behind fast mutations.
+  const deferredFiles = useDeferredValue(files);
   const folderTree = useMemo(
-    () => buildFolderTree(files, folder || ""),
-    [files, folder],
+    () => buildFolderTree(deferredFiles, folder || ""),
+    [deferredFiles, folder],
   );
   const totalFolders = useMemo(() => countFolders(folderTree), [folderTree]);
 
@@ -852,7 +903,7 @@ export default function App() {
 
       {/* Status strip (compact, below header) */}
       {(isScanning || scan.status !== "idle") && (
-        <div className="no-drag flex items-center gap-3 px-4 h-7 border-b border-nerv-border/40 text-[10px] font-mono flex-shrink-0 z-20 bg-nerv-panel/40 titlebar-drag">
+        <div className="no-drag flex items-center gap-3 px-4 h-7 border-b border-nerv-border/40 text-[10px] font-mono flex-shrink-0 z-20 bg-nerv-panel/40">
           {isScanning ? (
             <>
               <span className="text-nerv-amber font-semibold">
@@ -926,9 +977,11 @@ export default function App() {
           totalFolders={totalFolders}
           selectedFolder={selectedFolder}
           onSelectFolder={setSelectedFolder}
+          hiddenFolders={hiddenFolders}
           typeFilter={typeFilter}
           onTypeFilterChange={setTypeFilter}
           stats={stats}
+          favoriteCount={favorites.size}
           onDropFiles={handleMoveToDir}
           selectedIds={selectedIds}
           tags={tagSystem.tags}
@@ -985,6 +1038,11 @@ export default function App() {
               onSelectFolder={setSelectedFolder}
               files={files}
               totalBytes={stats.totalSizeBytes}
+              hiddenFolders={hiddenFolders}
+              onToggleHideFolder={toggleHideFolder}
+              onFolderContextMenu={(folderPath, x, y) =>
+                setFolderContextMenu({ folderPath, x, y })
+              }
             />
           ) : groups.length === 0 || resultCount === 0 ? (
             <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-3">
@@ -1008,11 +1066,14 @@ export default function App() {
               groups={groups}
               viewMode={viewMode}
               groupMode={groupMode}
-              targetColumnWidth={gridDensity}
+              targetColumnWidth={packedDensity}
               selectedIds={selectedIds}
               favorites={favorites}
               onToggleSelect={toggleSelect}
               onOpen={openViewer}
+              onMove={handleMoveFile}
+              onRename={(f) => setRenameDialogFile(f)}
+              onTrash={handleTrashFile}
               onToggleFavorite={toggleFavorite}
               onContextMenu={(file, e) => {
                 e.preventDefault();
@@ -1022,6 +1083,7 @@ export default function App() {
                 setActiveInspectFile(file);
                 if (viewMode !== "split") openViewer(file);
               }}
+              onCloseInspector={() => setActiveInspectFile(null)}
               activeInspectFile={activeInspectFile}
               reloadEpoch={reloadEpoch}
               tags={tagSystem.tags}
@@ -1060,21 +1122,34 @@ export default function App() {
               {/* Segmented ratio bar */}
               <div className="eva-segbar flex h-3 w-32">
                 {(() => {
-                  const total = stats.totalFiles;
-                  const imgPct = (stats.imageCount / total) * 100;
-                  const vidPct = (stats.videoCount / total) * 100;
+                  const img = stats.imageCount;
+                  const vid = stats.videoCount;
+                  // Enforce a minimum 10% sliver for any non-zero type
+                  // so a small-but-present count is always visible.
+                  let imgPct = (img / stats.totalFiles) * 100;
+                  let vidPct = (vid / stats.totalFiles) * 100;
+                  const MIN = 10;
+                  if (img > 0 && imgPct < MIN) imgPct = MIN;
+                  if (vid > 0 && vidPct < MIN) vidPct = MIN;
+                  if (imgPct + vidPct > 100) {
+                    // Over-clamped — scale the dominant one down.
+                    if (img >= vid) imgPct = 100 - vidPct;
+                    else vidPct = 100 - imgPct;
+                  }
                   return (
                     <>
                       <div
                         className="bg-nerv-cyan"
                         style={{ width: `${imgPct}%` }}
-                        title={`IMG: ${stats.imageCount.toLocaleString()} (${imgPct.toFixed(1)}%)`}
+                        title={`IMG: ${img.toLocaleString()} (${((img / stats.totalFiles) * 100).toFixed(1)}%)`}
                       />
-                      <div
-                        className="bg-nerv-green"
-                        style={{ width: `${vidPct}%` }}
-                        title={`VID: ${stats.videoCount.toLocaleString()} (${vidPct.toFixed(1)}%)`}
-                      />
+                      {vid > 0 && (
+                        <div
+                          className="bg-nerv-green"
+                          style={{ width: `${vidPct}%` }}
+                          title={`VID: ${vid.toLocaleString()} (${((vid / stats.totalFiles) * 100).toFixed(1)}%)`}
+                        />
+                      )}
                     </>
                   );
                 })()}
@@ -1161,8 +1236,64 @@ export default function App() {
                 setContextMenu(null);
               },
             },
+            { key: "sep-3" },
+            {
+              key: "hide-folder",
+              label: "Hide Containing Folder",
+              onClick: () => {
+                const dir = contextMenu.file.filePath.replace(/[\\/][^\\/]+$/, "");
+                if (dir) toggleHideFolder(dir);
+                setContextMenu(null);
+              },
+            },
           ]}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {folderContextMenu && (
+        <ContextMenu
+          position={{ x: folderContextMenu.x, y: folderContextMenu.y }}
+          items={[
+            {
+              key: "open-folder",
+              label: "Open in Browser",
+              onClick: () => {
+                setSelectedFolder(folderContextMenu.folderPath);
+                setViewMode("folders");
+                setFolderContextMenu(null);
+              },
+            },
+            { key: "sep-1" },
+            {
+              key: "reveal-folder",
+              label: "Reveal in File Manager",
+              onClick: () => {
+                void window.scanAPI.showItemInFolder(folderContextMenu.folderPath);
+                setFolderContextMenu(null);
+              },
+            },
+            {
+              key: "copy-folder-path",
+              label: "Copy Folder Path",
+              onClick: () => {
+                void window.scanAPI.writeClipboard(folderContextMenu.folderPath);
+                setFolderContextMenu(null);
+              },
+            },
+            { key: "sep-2" },
+            {
+              key: "toggle-hide",
+              label: hiddenFolders.has(folderContextMenu.folderPath)
+                ? "Unhide Folder"
+                : "Hide Folder",
+              onClick: () => {
+                toggleHideFolder(folderContextMenu.folderPath);
+                setFolderContextMenu(null);
+              },
+            },
+          ]}
+          onClose={() => setFolderContextMenu(null)}
         />
       )}
 
@@ -1184,9 +1315,20 @@ export default function App() {
             type="button"
             className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-amber/60 hover:bg-nerv-amber/5 transition-all group"
             onClick={() => {
-              for (const f of derivedFiles) {
-                if (selectedIds.has(f.filePath)) toggleFavorite(f);
-              }
+              // Single state update for the whole selection — the previous
+              // per-file toggleFavorite loop fired N setState calls, each
+              // re-rendering the entire grid.
+              const picked = derivedFiles
+                .filter((f) => selectedIds.has(f.filePath))
+                .map((f) => f.filePath);
+              setFavorites((prev) => {
+                const next = new Set(prev);
+                for (const p of picked) {
+                  if (next.has(p)) next.delete(p);
+                  else next.add(p);
+                }
+                return next;
+              });
             }}
           >
             <span className="text-nerv-amber text-xs">★</span>

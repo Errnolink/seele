@@ -22,14 +22,9 @@ process.parentPort.on("message", (event: unknown) => {
     return;
   }
 
-  let batchCount = 0;
-  let fileCount = 0;
-  const t0 = Date.now();
   scanFolderStream(
     folderPath,
     (files: MediaFile[]) => {
-      batchCount++;
-      fileCount += files.length;
       post({ type: "batch", files });
     },
     (progress: ScanProgress) => post({ type: "progress", progress }),
@@ -75,15 +70,16 @@ function readStringField(
 }
 
 /**
- * Header-only dimension probe for image files. Reads just enough bytes to
- * extract width/height — no full decode. Runs in the worker thread so the
- * main process never blocks. Non-images / corrupt headers return `null`
- * and the file keeps its placeholder `0×0` (renderer falls back to a
- * default aspect ratio).
+ * Header-only dimension probe for image files. Receives a pre-read header
+ * Buffer (the first ~64KB of the file) so the scanner can merge stat +
+ * header-read into a single open() — no second file open per image.
+ * Runs in the worker thread so the main process never blocks. Returns
+ * `null` for corrupt/unsupported headers; the file keeps its placeholder
+ * `0×0` and the renderer falls back to a default aspect ratio.
  */
-function probeImageDimensions(file: MediaFile): { width: number; height: number } | null {
+function probeImageDimensions(header: Buffer): { width: number; height: number } | null {
   try {
-    const dim = imageSize(file.filePath);
+    const dim = imageSize(header);
     if (dim && typeof dim.width === "number" && typeof dim.height === "number") {
       return { width: dim.width, height: dim.height };
     }

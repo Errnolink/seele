@@ -5,17 +5,13 @@ export interface TitleBarProps {
 }
 
 /**
- * Custom frameless title bar with NERV styling and custom min/max/close
- * buttons. The `-webkit-app-region: drag` CSS makes the bar draggable.
- * Buttons have `no-drag` so clicks register.
+ * Status bar with NERV styling and custom min/max/close buttons. Not a
+ * drag region — window dragging happens in Header row 1 (`titlebar-drag`).
  */
 export const TitleBar: React.FC<TitleBarProps> = memo(({ folder }) => {
   return (
-    <div
-      className="titlebar-drag flex h-8 items-center justify-between bg-nerv-bg border-b border-nerv-purple/30 select-none"
-      style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
-    >
-      {/* Left: drag handle — folder path shown as status */}
+    <div className="flex h-8 items-center justify-between bg-nerv-bg border-b border-nerv-purple/30 select-none">
+      {/* Left: status indicator — folder path shown as status */}
       <div className="flex items-center gap-2 pl-3">
         <span className="w-1.5 h-1.5 rounded-full bg-nerv-lime shadow-[0_0_6px_#c9e98a]" />
         <span className="font-mono text-[9px] tracking-wider text-nerv-muted truncate max-w-[500px]">
@@ -24,10 +20,7 @@ export const TitleBar: React.FC<TitleBarProps> = memo(({ folder }) => {
       </div>
 
       {/* Right: window controls */}
-      <div
-        className="no-drag flex items-center h-full"
-        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-      >
+      <div className="flex items-center h-full">
         <button
           type="button"
           onClick={() => window.scanAPI.winMinimize()}

@@ -106,7 +106,8 @@ textarea,
  *  Brutalist geometry rule (§2.4) — no rounded corners anywhere
  * ========================================================================= */
 * {
-  border-radius: 0 !important;
+  /* No `!important` — `.rounded-*` utilities must be able to override. */
+  border-radius: 0;
 }
 
 /* =========================================================================

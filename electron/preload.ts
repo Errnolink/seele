@@ -81,6 +81,12 @@ export interface ScanAPI {
   openPath(filePath: string): Promise<string>;
   /** Copy text to the system clipboard (v3 review #13). */
   writeClipboard(text: string): Promise<void>;
+  /** Hash + dominant colors + EXIF camera info for the inspector panel. */
+  getFileInsights(filePath: string): Promise<{
+    hash: string;
+    colors: Array<{ r: number; g: number; b: number; hex: string }>;
+    camera: { make?: string; model?: string; lens?: string; fNumber?: number; iso?: number; exposure?: string };
+  } | null>;
 
   // ── File operations (organize & move) ──
 
@@ -164,6 +170,7 @@ const api: ScanAPI = {
 
   // Context-menu / shell actions.
   showItemInFolder: (filePath) => ipcRenderer.invoke("shell:showItemInFolder", filePath),
+  getFileInsights: (filePath) => ipcRenderer.invoke("file:insights", filePath),
   openPath: (filePath) => ipcRenderer.invoke("shell:openPath", filePath),
   writeClipboard: (text) => ipcRenderer.invoke("clipboard:writeText", text),
 

@@ -32,6 +32,12 @@ interface FolderBrowserProps {
   files: MediaFile[];
   /** Total bytes across the whole archive (for the relative capacity bar). */
   totalBytes: number;
+  /** Folders hidden from the grid (subtree match). */
+  hiddenFolders: Set<string>;
+  /** Toggle a folder's hidden state. */
+  onToggleHideFolder: (folderPath: string) => void;
+  /** Right-click handler — opens the App-level folder context menu. */
+  onFolderContextMenu?: (folderPath: string, x: number, y: number) => void;
 }
 
 /** Coarse type breakdown for files inside a folder subtree. */
@@ -49,11 +55,40 @@ function classifyFile(f: MediaFile): "img" | "vid" | "raw" {
   return "img";
 }
 
-/** Match a file's normalized path against a folder path (subtree match). */
-function isInFolder(file: MediaFile, folderNorm: string): boolean {
-  if (file.normPath === folderNorm) return true;
-  const prefix = folderNorm.endsWith("/") ? folderNorm : folderNorm + "/";
-  return file.normPath.startsWith(prefix);
+/** Build folder → files map (each folder's subtree: own + descendants) in
+ *  ONE pass over the file list. Cards read their bucket in O(1) instead of
+ *  each card re-filtering the whole array (O(cards × files)). Keys are the
+ *  tree's normalized lowercase paths (matching `FolderNode.path`). */
+function buildFolderBuckets(
+  tree: FolderNode,
+  files: MediaFile[],
+): Map<string, MediaFile[]> {
+  const buckets = new Map<string, MediaFile[]>();
+  const rootNorm = tree.path.replace(/\\/g, "/").toLowerCase().replace(/\/$/, "");
+  for (const f of files) {
+    const rel = f.normPath.startsWith(rootNorm + "/")
+      ? f.normPath.slice(rootNorm.length + 1)
+      : f.normPath;
+    const segs = rel.split("/").filter(Boolean);
+    segs.pop(); // drop the file name — directory segments only
+    let acc = rootNorm;
+    let bucket = buckets.get(acc);
+    if (!bucket) {
+      bucket = [];
+      buckets.set(acc, bucket);
+    }
+    bucket.push(f);
+    for (const seg of segs) {
+      acc += "/" + seg;
+      bucket = buckets.get(acc);
+      if (!bucket) {
+        bucket = [];
+        buckets.set(acc, bucket);
+      }
+      bucket.push(f);
+    }
+  }
+  return buckets;
 }
 
 /** Derive a thumbnail URL for a sample file (small, sharp-resized). */
@@ -77,6 +112,9 @@ export const FolderBrowser = memo(function FolderBrowser({
   onSelectFolder,
   files,
   totalBytes,
+  hiddenFolders,
+  onToggleHideFolder,
+  onFolderContextMenu,
 }: FolderBrowserProps) {
   // Resolve the node we're currently viewing (root if nothing selected).
   const viewingNode = useMemo(() => {
@@ -100,6 +138,13 @@ export const FolderBrowser = memo(function FolderBrowser({
     if (!viewingNode || viewingNode === tree) return [];
     return viewingNode.path.replace(/\\/g, "/").split("/").filter(Boolean);
   }, [viewingNode, tree]);
+
+  // Subtree file buckets, built once per (tree, files) change — cards no
+  // longer re-filter the entire file list each render.
+  const folderBuckets = useMemo(
+    () => (tree ? buildFolderBuckets(tree, files) : new Map<string, MediaFile[]>()),
+    [tree, files],
+  );
 
   if (!tree || !viewingNode) {
     return (
@@ -200,9 +245,12 @@ export const FolderBrowser = memo(function FolderBrowser({
               <SubfolderCard
                 key={folderStat.path}
                 folder={folderStat}
-                files={files}
+                folderFiles={folderBuckets.get(folderStat.path) ?? []}
                 totalBytes={totalBytes}
                 onSelect={onSelectFolder}
+                onFolderContextMenu={onFolderContextMenu}
+                hiddenFolders={hiddenFolders}
+                onToggleHideFolder={onToggleHideFolder}
               />
             ))}
           </div>
@@ -216,25 +264,25 @@ export const FolderBrowser = memo(function FolderBrowser({
 
 interface SubfolderCardProps {
   folder: FolderNode;
-  files: MediaFile[];
+  /** Files inside this folder's subtree (own + descendants), pre-bucketed. */
+  folderFiles: MediaFile[];
   totalBytes: number;
   onSelect: (folder: string | null) => void;
+  hiddenFolders: Set<string>;
+  onToggleHideFolder: (folderPath: string) => void;
+  /** Right-click handler — opens the App-level folder context menu. */
+  onFolderContextMenu?: (folderPath: string, x: number, y: number) => void;
 }
 
 const SubfolderCard = memo(function SubfolderCard({
   folder,
-  files,
+  folderFiles,
   totalBytes,
   onSelect,
+  hiddenFolders,
+  onToggleHideFolder,
+  onFolderContextMenu,
 }: SubfolderCardProps) {
-  const folderNorm = folder.path.replace(/\\/g, "/").toLowerCase();
-
-  // Files whose path falls inside this folder subtree (own + descendants).
-  const folderFiles = useMemo(
-    () => files.filter((f) => isInFolder(f, folderNorm)),
-    [files, folderNorm],
-  );
-
   // Type breakdown: IMG / VID / RAW.
   const { img, vid, raw } = useMemo<TypeBreakdown>(() => {
     let i = 0, v = 0, r = 0;
@@ -255,11 +303,20 @@ const SubfolderCard = memo(function SubfolderCard({
 
   const relativePercent = totalBytes > 0 ? (folder.size / totalBytes) * 100 : 0;
   const displayPath = "/" + folder.path.replace(/\\/g, "/");
+  const isHidden = hiddenFolders.has(folder.path);
 
   return (
     <div
-      onDoubleClick={() => onSelect(folder.path)}
-      className="group relative flex flex-col border border-nerv-border bg-nerv-panel hover:border-nerv-orange/70 hover:shadow-[0_0_24px_rgba(255,152,48,0.25)] transition-all overflow-hidden"
+      onContextMenu={(e) => {
+        e.preventDefault();
+        if (onFolderContextMenu) onFolderContextMenu(folder.path, e.clientX, e.clientY);
+        else onToggleHideFolder(folder.path);
+      }}
+      className={`group relative flex flex-col border bg-nerv-panel transition-all overflow-hidden ${
+        isHidden
+          ? "border-nerv-border/30 opacity-40 grayscale"
+          : "border-nerv-border hover:border-nerv-orange/70 hover:shadow-[0_0_24px_rgba(255,152,48,0.25)]"
+      }`}
     >
       {/* Top Bar: folder name + size */}
       <div className="p-3 bg-nerv-panel-hi border-b border-nerv-border flex items-start justify-between gap-2">
@@ -286,6 +343,28 @@ const SubfolderCard = memo(function SubfolderCard({
             {relativePercent.toFixed(1)}% ARCHIVE
           </span>
         </div>
+
+        {/* Hide/unhide toggle — grays out the card and excludes files from the grid */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleHideFolder(folder.path);
+          }}
+          title={isHidden ? "Unhide folder" : "Hide folder from grid"}
+          aria-label={isHidden ? "Unhide folder" : "Hide folder from grid"}
+          className={`shrink-0 w-6 h-6 flex items-center justify-center transition-colors ${
+            isHidden
+              ? "text-nerv-amber hover:text-nerv-orange"
+              : "text-nerv-muted/50 opacity-0 group-hover:opacity-100 hover:text-nerv-amber"
+          }`}
+        >
+          {isHidden ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><path d="M1 1l22 22" /></svg>
+          )}
+        </button>
       </div>
 
       {/* ── Relative capacity bar ── */}

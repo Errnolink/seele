@@ -98,12 +98,14 @@ export interface ScanOptions {
    */
   signal?: AbortSignal;
   /**
-   * Optional header-only dimension probe for image files. Called per file
-   * during Phase 2 stat; the Electron worker passes a lightweight reader
-   * (image-size) so the masonry grid gets real aspect ratios without the
-   * scanner depending on any native imaging library. Returns `{width,height}`
-   * or `null` when the header can't be parsed. Only invoked for images;
-   * videos are skipped (probe is responsible for early-out).
+   * Optional header-only dimension probe for image files. Receives a
+   * pre-read header `Buffer` (the first bytes of the file) so the caller
+   * can merge the stat + header-read into a single `open()` instead of
+   * two sequential synchronous opens. The Electron worker passes a thin
+   * wrapper around `imageSize(buffer)` so the masonry grid gets real
+   * aspect ratios without the scanner depending on any native imaging
+   * library. Returns `{width,height}` or `null` when the header can't be
+   * parsed. Only invoked for images; videos are skipped.
    */
-  probeDimensions?: (file: MediaFile) => { width: number; height: number } | null;
+  probeDimensions?: (header: Buffer) => { width: number; height: number } | null;
 }

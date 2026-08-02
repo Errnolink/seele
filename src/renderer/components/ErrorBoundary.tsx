@@ -27,7 +27,6 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     // Log to the devtools console; a real app would ship this to telemetry.
-    // eslint-disable-next-line no-console
     console.error("Unhandled renderer error", error, info.componentStack);
   }
 

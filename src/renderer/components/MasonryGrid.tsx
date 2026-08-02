@@ -34,8 +34,6 @@ const GAP = 10;
 const PADDING = 16;
 /** Overscan band (px above + below the viewport) mounted for smooth scroll. */
 const OVERSCAN = 600;
-/** Width reserved for the inspector in split mode (px). */
-const SPLIT_INSPECTOR_W = 320;
 /** Fallback aspect ratio (height/width) for files without dimensions. */
 const FALLBACK_RATIO = 0.75;
 /** Uniform tile height for grid + list virtualization (px). */
@@ -56,9 +54,15 @@ export interface MasonryGridProps {
   favorites: Set<string>;
   onToggleSelect: (filePath: string, e: React.MouseEvent) => void;
   onOpen: (file: MediaFile) => void;
+  /** Inspector toolbar actions (split view). */
+  onMove?: (file: MediaFile) => void;
+  onRename?: (file: MediaFile) => void;
+  onTrash?: (file: MediaFile) => void;
+  onInspect: (file: MediaFile) => void;
+  /** Close the inspector panel (× button). */
+  onCloseInspector?: () => void;
   onToggleFavorite: (file: MediaFile) => void;
   onContextMenu: (file: MediaFile, e: React.MouseEvent) => void;
-  onInspect: (file: MediaFile) => void;
   activeInspectFile: MediaFile | null;
   /** Incremented to force re-fetch of failed tile thumbnails. */
   reloadEpoch: number;
@@ -106,6 +110,10 @@ interface MediaCardProps {
   onToggleFavorite: (file: MediaFile) => void;
   onContextMenu: (file: MediaFile, e: React.MouseEvent) => void;
   onInspect: (file: MediaFile) => void;
+  /** Tags assigned to this file (for always-visible pills). */
+  fileTags?: TagDef[];
+  /** Report the decoded natural dimensions of the loaded thumbnail. */
+  onDimensions?: (filePath: string, width: number, height: number) => void;
 }
 const MediaCard = memo(function MediaCard({
   file,
@@ -119,6 +127,8 @@ const MediaCard = memo(function MediaCard({
   onToggleFavorite,
   onContextMenu,
   onInspect,
+  fileTags,
+  onDimensions,
 }: MediaCardProps) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
@@ -198,7 +208,16 @@ const MediaCard = memo(function MediaCard({
             src={url}
             alt={file.fileName}
             loading="lazy"
-            onLoad={() => setLoaded(true)}
+            onLoad={(e) => {
+              setLoaded(true);
+              // Report the decoded thumbnail's natural size so the main
+              // process can persist aspect ratios to the on-disk cache
+              // (restores correct masonry proportions next launch).
+              const img = e.currentTarget;
+              if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                onDimensions?.(file.filePath, img.naturalWidth, img.naturalHeight);
+              }
+            }}
             onError={() => setError(true)}
             className={[
               "w-full h-full object-cover transition-all duration-300 group-hover:scale-105",
@@ -210,7 +229,7 @@ const MediaCard = memo(function MediaCard({
       )}
 
       {/* Top action overlay (revealed on hover). */}
-      <div className="absolute top-1.5 left-1.5 right-1.5 flex items-start justify-between opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none">
+      <div className="absolute top-1.5 left-1.5 right-1.5 flex items-start justify-between opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none z-10">
         <button
           type="button"
           aria-label="Toggle selection"
@@ -244,62 +263,68 @@ const MediaCard = memo(function MediaCard({
           {"\u2605"}
         </button>
       </div>
+
+      {/* Favorite star — always visible when starred (non-hover fallback). */}
+      {favorite && (
+        <span className="absolute top-1.5 right-1.5 text-nerv-amber text-[13px] leading-none drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)] pointer-events-none z-10">
+          {"\u2605"}
+        </span>
+      )}
+
       {/* Hover reticle brackets — targeting reticle aesthetic (v2.5 §5). */}
-      <div className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+      <div className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-10">
         <span className="absolute top-0.5 left-0.5 w-2.5 h-2.5 border-t border-l border-nerv-orange/70" />
         <span className="absolute top-0.5 right-0.5 w-2.5 h-2.5 border-t border-r border-nerv-orange/70" />
         <span className="absolute bottom-0.5 left-0.5 w-2.5 h-2.5 border-b border-l border-nerv-orange/70" />
         <span className="absolute bottom-0.5 right-0.5 w-2.5 h-2.5 border-b border-r border-nerv-orange/70" />
       </div>
 
-      {/* Plate ID (bottom-left, revealed on hover) — v2.5 §5. */}
-      <div className="absolute bottom-1.5 left-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none">
-        <span className="bg-black/60 text-nerv-orange text-[8px] font-mono font-bold tracking-wider px-1 py-0.5 border border-nerv-orange/30">
-          {plateId(file.filePath)}
-        </span>
-      </div>
-
-      {/* Type badge (bottom-right) — EVA tag-chip geometry. */}
-      <div className="absolute bottom-1.5 right-1.5 pointer-events-none">
-        {isVideo ? (
-          <span className="tag-chip px-1.5 py-0.5 bg-nerv-green/20 border border-nerv-green/50 text-nerv-green text-[9px] font-mono font-bold tracking-wider">
-            VID
-          </span>
-        ) : (
-          <span className="tag-chip px-1.5 py-0.5 bg-nerv-cyan/20 border border-nerv-cyan/50 text-nerv-cyan text-[9px] font-mono font-bold tracking-wider">
-            IMG
-          </span>
-        )}
-      </div>
-
-      {/* Center play circle for videos. */}
+      {/* Video type tint + play icon — always visible. */}
       {isVideo && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="w-9 h-9 bg-nerv-green/30 border border-nerv-green/70 flex items-center justify-center backdrop-blur-sm">
-            <svg
-              className="w-4 h-4 text-nerv-green"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              aria-hidden="true"
-            >
+          <div className="w-8 h-8 bg-black/40 border border-nerv-green/70 flex items-center justify-center backdrop-blur-sm">
+            <svg className="w-4 h-4 text-nerv-green" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <path d="M8 5v14l11-7z" />
             </svg>
           </div>
         </div>
       )}
 
-      {/* Bottom info gradient (revealed on hover). */}
-      <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/95 via-black/70 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none">
-        <p className="text-white text-[11px] font-bold truncate font-mono">
+      {/* Always-visible metadata bar (bottom). */}
+      <div className="absolute bottom-0 left-0 right-0 px-2 pt-4 pb-1.5 bg-gradient-to-t from-black/95 via-black/80 to-transparent pointer-events-none">
+        <p className="text-white text-[10px] font-bold truncate font-mono leading-tight">
           {file.fileName}
         </p>
-        <p className="text-nerv-amber text-[10px] font-mono">
-          {file.width > 0 && file.height > 0
-            ? `${file.width}x${file.height}`
-            : "\u2014"}
-          {" \u00b7 "}
-          {formatBytes(file.sizeBytes)}
-        </p>
+        <div className="flex items-center gap-1.5 mt-0.5 text-[8px] font-mono tabular-nums">
+          <span className="text-nerv-amber">
+            {file.width > 0 && file.height > 0 ? `${file.width}x${file.height}` : "\u2014"}
+          </span>
+          <span className="text-white/40">·</span>
+          <span className="text-white/70">{formatBytes(file.sizeBytes)}</span>
+          <span className="ml-auto shrink-0">
+            {isVideo ? (
+              <span className="text-nerv-green">VID</span>
+            ) : (
+              <span className="text-nerv-cyan">IMG</span>
+            )}
+          </span>
+        </div>
+        {fileTags && fileTags.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1">
+            {fileTags.slice(0, 3).map((t) => (
+              <span
+                key={t.key}
+                className="px-1 py-px text-[7px] font-mono font-bold tracking-wider border"
+                style={{ color: t.color, borderColor: `${t.color}55` }}
+              >
+                {t.label}
+              </span>
+            ))}
+            {fileTags.length > 3 && (
+              <span className="text-[7px] font-mono text-white/50">+{fileTags.length - 3}</span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -345,11 +370,13 @@ interface PlacedTile {
   height: number;
 }
 
-/** One masonry section = optional group header + its packed tiles. */
+/** One masonry section = optional group header + its packed tiles.
+ *  `colTiles` holds one Y-sorted list per column so the visibility window
+ *  can binary-search instead of scanning every tile on each scroll frame. */
 interface Section {
   label?: string;
   count: number;
-  tiles: PlacedTile[];
+  colTiles: PlacedTile[][];
   height: number;
   offsetY: number;
 }
@@ -367,9 +394,13 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
   favorites,
   onToggleSelect,
   onOpen,
+  onMove,
+  onRename,
+  onTrash,
   onToggleFavorite,
   onContextMenu,
   onInspect,
+  onCloseInspector,
   activeInspectFile,
   reloadEpoch,
   tags,
@@ -407,7 +438,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
       ro.disconnect();
       if (rafId.current !== null) cancelAnimationFrame(rafId.current);
     };
-  }, []);
+  }, [viewMode]);
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -417,6 +448,48 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
       rafId.current = null;
       setScrollTop(el.scrollTop);
     });
+  }, []);
+
+  // ── Decoded-dimension reporter (v4 cache wiring) ──
+  // MediaCards report naturalWidth/Height on image load; coalesce into a
+  // single IPC flush so repeated scrolls don't hammer the main process.
+  const dimsRef = useRef(new Map<string, { w: number; h: number }>());
+  const dimsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reportDimensions = useCallback(
+    (filePath: string, width: number, height: number) => {
+      if (width <= 0 || height <= 0) return;
+      const prev = dimsRef.current.get(filePath);
+      if (prev && prev.w === width && prev.h === height) return;
+      dimsRef.current.set(filePath, { w: width, h: height });
+      if (dimsTimerRef.current) return;
+      dimsTimerRef.current = setTimeout(() => {
+        dimsTimerRef.current = null;
+        const entries = Array.from(dimsRef.current, ([filePath, d]) => ({
+          filePath,
+          width: d.w,
+          height: d.h,
+        }));
+        dimsRef.current.clear();
+        if (entries.length > 0) void window.scanAPI.saveDimensions(entries);
+      }, 1500);
+    },
+    [],
+  );
+  // Flush any pending dimensions on unmount so the cache isn't lost.
+  useEffect(() => {
+    const dims = dimsRef.current;
+    return () => {
+      if (dimsTimerRef.current) {
+        clearTimeout(dimsTimerRef.current);
+        dimsTimerRef.current = null;
+      }
+      const entries = Array.from(dims, ([filePath, d]) => ({
+        filePath,
+        width: d.w,
+        height: d.h,
+      }));
+      if (entries.length > 0) void window.scanAPI.saveDimensions(entries);
+    };
   }, []);
 
   // Flattened file list + per-group index offsets, memoized so the heavy
@@ -431,13 +504,11 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
     return { allFiles: files, groupSpans: spans };
   }, [groups]);
 
-  // Effective container width for column math (split reserves the inspector).
+  // Effective container width for column math. In split mode the inspector
+  // is a separate <aside> sibling, so the measured width is grid-only.
   const effectiveWidth = useMemo(() => {
-    const base = containerWidth - PADDING * 2;
-    if (viewMode === "split") return Math.max(0, base - SPLIT_INSPECTOR_W);
-    return Math.max(0, base);
-  }, [containerWidth, viewMode]);
-
+    return Math.max(0, containerWidth - PADDING * 2);
+  }, [containerWidth]);
 
   // Show group labels only when grouping is active.
   const showGroups = groupMode !== "none" && groupSpans.length > 0;
@@ -461,7 +532,10 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
       const startY = cursorY;
       const headerOffset = showGroups ? HEADER_HEIGHT + GAP : 0;
       const colHeights = new Array(cols).fill(headerOffset) as number[];
-      const tiles: PlacedTile[] = [];
+      // Per-column tile lists — tiles land in a column in Y order, which
+      // lets the visibility window binary-search per column (O(visible)
+      // per scroll frame instead of O(all tiles)).
+      const colTiles: PlacedTile[][] = Array.from({ length: cols }, () => []);
       for (let i = 0; i < span.count; i++) {
         const idx = span.start + i;
         const file = allFiles[idx];
@@ -474,7 +548,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
             ? file.height / file.width
             : FALLBACK_RATIO;
         const tileH = Math.round(columnWidth * ratio);
-        tiles.push({
+        colTiles[shortest].push({
           file,
           index: idx,
           x: PADDING + shortest * (columnWidth + GAP),
@@ -488,7 +562,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
       sections.push({
         label: span.label,
         count: span.count,
-        tiles,
+        colTiles,
         height,
         offsetY: startY,
       });
@@ -565,67 +639,98 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
     );
   }
 
+  const gridContent = viewMode === "list" ? (
+    <ListView
+      sections={list!.sections}
+      allFiles={allFiles}
+      scrollTop={scrollTop}
+      viewportHeight={viewportHeight}
+      showGroups={showGroups}
+      selectedIds={selectedIds}
+      favorites={favorites}
+      onToggleSelect={onToggleSelect}
+      onOpen={onOpen}
+      onToggleFavorite={onToggleFavorite}
+      onContextMenu={onContextMenu}
+      onInspect={onInspect}
+      reloadEpoch={reloadEpoch}
+    />
+  ) : viewMode === "grid" ? (
+    <GridView
+      sections={grid!.sections}
+      allFiles={allFiles}
+      scrollTop={scrollTop}
+      viewportHeight={viewportHeight}
+      showGroups={showGroups}
+      selectedIds={selectedIds}
+      favorites={favorites}
+      onToggleSelect={onToggleSelect}
+      onOpen={onOpen}
+      onToggleFavorite={onToggleFavorite}
+      onContextMenu={onContextMenu}
+      onInspect={onInspect}
+      reloadEpoch={reloadEpoch}
+      fileTagGetter={fileTagGetter}
+      onDimensions={reportDimensions}
+    />
+  ) : (
+    <MasonryView
+      sections={masonry!.sections}
+      totalHeight={masonry!.totalHeight}
+      scrollTop={scrollTop}
+      viewportHeight={viewportHeight}
+      showGroups={showGroups}
+      selectedIds={selectedIds}
+      favorites={favorites}
+      onToggleSelect={onToggleSelect}
+      onOpen={onOpen}
+      onToggleFavorite={onToggleFavorite}
+      onContextMenu={onContextMenu}
+      onInspect={onInspect}
+      reloadEpoch={reloadEpoch}
+      fileTagGetter={fileTagGetter}
+      onDimensions={reportDimensions}
+    />
+  );
+
+  // Split view: grid scrolls independently on the left; inspector is a
+  // pinned right column with its own scroll and a divider border.
+  if (viewMode === "split") {
+    return (
+      <div className="flex h-full w-full overflow-hidden">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-nerv-bg p-4"
+        >
+          {gridContent}
+        </div>
+        <aside className="w-80 shrink-0 border-l border-nerv-border bg-nerv-panel overflow-y-auto overflow-x-hidden flex flex-col">
+          <InspectorCard
+            file={activeInspectFile}
+            onOpen={onOpen}
+            allFiles={allFiles}
+            onNavigate={onInspect}
+            onClose={onCloseInspector}
+            onMove={onMove}
+            onRename={onRename}
+            onTrash={onTrash}
+            tags={tags}
+            fileTags={activeInspectFile && fileTagGetter ? fileTagGetter(activeInspectFile.filePath) : undefined}
+            onToggleFileTag={onToggleFileTag}
+          />
+        </aside>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={scrollRef}
       onScroll={onScroll}
       className="w-full h-full overflow-y-auto overflow-x-hidden bg-nerv-bg p-4"
     >
-      {viewMode === "list" ? (
-        <ListView
-          sections={list!.sections}
-          allFiles={allFiles}
-          scrollTop={scrollTop}
-          viewportHeight={viewportHeight}
-          showGroups={showGroups}
-          selectedIds={selectedIds}
-          favorites={favorites}
-          onToggleSelect={onToggleSelect}
-          onOpen={onOpen}
-          onToggleFavorite={onToggleFavorite}
-          onContextMenu={onContextMenu}
-          onInspect={onInspect}
-          reloadEpoch={reloadEpoch}
-        />
-      ) : viewMode === "grid" ? (
-        <GridView
-          sections={grid!.sections}
-          allFiles={allFiles}
-          scrollTop={scrollTop}
-          viewportHeight={viewportHeight}
-          showGroups={showGroups}
-          selectedIds={selectedIds}
-          favorites={favorites}
-          onToggleSelect={onToggleSelect}
-          onOpen={onOpen}
-          onToggleFavorite={onToggleFavorite}
-          onContextMenu={onContextMenu}
-          onInspect={onInspect}
-          reloadEpoch={reloadEpoch}
-        />
-      ) : (
-        <MasonryView
-          sections={masonry!.sections}
-          totalHeight={masonry!.totalHeight}
-          scrollTop={scrollTop}
-          viewportHeight={viewportHeight}
-          showGroups={showGroups}
-          selectedIds={selectedIds}
-          favorites={favorites}
-          onToggleSelect={onToggleSelect}
-          onOpen={onOpen}
-          onToggleFavorite={onToggleFavorite}
-          onContextMenu={onContextMenu}
-          onInspect={onInspect}
-          split={viewMode === "split"}
-          activeInspectFile={activeInspectFile}
-          onOpenInspect={onOpen}
-          reloadEpoch={reloadEpoch}
-          tags={tags}
-          fileTagGetter={fileTagGetter}
-          onToggleFileTag={onToggleFileTag}
-        />
-      )}
+      {gridContent}
     </div>
   );
 };
@@ -644,17 +749,14 @@ interface MasonryViewProps {
   favorites: Set<string>;
   onToggleSelect: (filePath: string, e: React.MouseEvent) => void;
   onOpen: (file: MediaFile) => void;
-  onToggleFavorite: (file: MediaFile) => void;
   onContextMenu: (file: MediaFile, e: React.MouseEvent) => void;
+  onToggleFavorite: (file: MediaFile) => void;
   onInspect: (file: MediaFile) => void;
-  split: boolean;
-  activeInspectFile: MediaFile | null;
-  onOpenInspect: (file: MediaFile) => void;
   reloadEpoch: number;
   /** Tag system props — v2.5 */
-  tags?: TagDef[];
   fileTagGetter?: (filePath: string) => TagDef[];
-  onToggleFileTag?: (filePath: string, tagKey: string) => void;
+  /** Report decoded thumbnail dimensions for the on-disk cache. */
+  onDimensions?: (filePath: string, width: number, height: number) => void;
 }
 
 const MasonryView = memo(function MasonryView({
@@ -662,21 +764,17 @@ const MasonryView = memo(function MasonryView({
   totalHeight,
   scrollTop,
   viewportHeight,
+  onOpen,
   showGroups,
   selectedIds,
   favorites,
   onToggleSelect,
-  onOpen,
   onToggleFavorite,
   onContextMenu,
   onInspect,
-  split,
-  activeInspectFile,
-  onOpenInspect,
   reloadEpoch,
-  tags,
   fileTagGetter,
-  onToggleFileTag,
+  onDimensions,
 }: MasonryViewProps) {
   const top = scrollTop - OVERSCAN;
   const bottom = scrollTop + viewportHeight + OVERSCAN;
@@ -693,67 +791,71 @@ const MasonryView = memo(function MasonryView({
     return out;
   }, [sections, top, bottom, showGroups]);
 
-  // Visible tiles.
+  // Visible tiles — O(visible), not O(all). Each column is Y-sorted at
+  // pack time, so we binary-search the first tile overlapping the top of
+  // the window and walk forward until the bottom edge passes.
   const visibleTiles = useMemo(() => {
     const out: Array<{ tile: PlacedTile; y: number }> = [];
     for (const s of sections) {
-      for (const tile of s.tiles) {
-        const absY = s.offsetY + tile.y;
-        if (absY + tile.height >= top && absY <= bottom) {
-          out.push({ tile, y: absY });
+      const sTop = top - s.offsetY;
+      const sBottom = bottom - s.offsetY;
+      for (const col of s.colTiles) {
+        let lo = 0;
+        let hi = col.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (col[mid].y + col[mid].height < sTop) lo = mid + 1;
+          else hi = mid;
+        }
+        for (let i = lo; i < col.length; i++) {
+          const tile = col[i];
+          if (tile.y > sBottom) break;
+          out.push({ tile, y: s.offsetY + tile.y });
         }
       }
     }
     return out;
   }, [sections, top, bottom]);
 
-  const inspector = split ? (
-    <InspectorCard file={activeInspectFile} onOpen={onOpenInspect} tags={tags} fileTags={activeInspectFile && fileTagGetter ? fileTagGetter(activeInspectFile.filePath) : undefined} onToggleFileTag={onToggleFileTag} />
-  ) : null;
-
   return (
-    <div className={split ? "flex gap-4" : "block"}>
-      <div
-        className="relative w-full"
-        style={{ height: `${totalHeight}px` }}
-      >
-        {visibleHeaders.map((h) => (
-          <div
-            key={`hdr-${h.label}`}
-            className="absolute left-0 w-full"
-            style={{ top: `${h.y}px`, height: `${HEADER_HEIGHT}px` }}
-          >
-            <GroupLabel label={h.label} count={h.count} />
-          </div>
-        ))}
-        {visibleTiles.map(({ tile, y }) => (
-          <div
-            key={tile.file.filePath}
-            className="absolute"
-            style={{
-              left: `${tile.x}px`,
-              top: `${y}px`,
-              width: `${tile.width}px`,
-              height: `${tile.height}px`,
-            }}
-          >
-            <MediaCard
-              file={tile.file}
-              aspectRatio={tile.width / tile.height}
-              selected={selectedIds.has(tile.file.filePath)}
-              favorite={favorites.has(tile.file.filePath)}
-              tileWidth={tile.width}
-              onToggleSelect={onToggleSelect}
-              onOpen={onOpen}
-              onToggleFavorite={onToggleFavorite}
-              onContextMenu={onContextMenu}
-              reloadEpoch={reloadEpoch}
-              onInspect={onInspect}
-            />
-          </div>
-        ))}
-      </div>
-      {inspector}
+    <div className="relative w-full" style={{ height: `${totalHeight}px` }}>
+      {visibleHeaders.map((h) => (
+        <div
+          key={`hdr-${h.label}`}
+          className="absolute left-0 w-full"
+          style={{ top: `${h.y}px`, height: `${HEADER_HEIGHT}px` }}
+        >
+          <GroupLabel label={h.label} count={h.count} />
+        </div>
+      ))}
+      {visibleTiles.map(({ tile, y }) => (
+        <div
+          key={tile.file.filePath}
+          className="absolute"
+          style={{
+            left: `${tile.x}px`,
+            top: `${y}px`,
+            width: `${tile.width}px`,
+            height: `${tile.height}px`,
+          }}
+        >
+          <MediaCard
+            file={tile.file}
+            aspectRatio={tile.width / tile.height}
+            selected={selectedIds.has(tile.file.filePath)}
+            favorite={favorites.has(tile.file.filePath)}
+            tileWidth={tile.width}
+            onToggleSelect={onToggleSelect}
+            onOpen={onOpen}
+            onToggleFavorite={onToggleFavorite}
+            onContextMenu={onContextMenu}
+            reloadEpoch={reloadEpoch}
+            onInspect={onInspect}
+            fileTags={fileTagGetter?.(tile.file.filePath)}
+            onDimensions={onDimensions}
+          />
+        </div>
+      ))}
     </div>
   );
 });
@@ -785,6 +887,9 @@ interface GridViewProps {
   onContextMenu: (file: MediaFile, e: React.MouseEvent) => void;
   onInspect: (file: MediaFile) => void;
   reloadEpoch: number;
+  fileTagGetter?: (filePath: string) => TagDef[];
+  /** Report decoded thumbnail dimensions for the on-disk cache. */
+  onDimensions?: (filePath: string, width: number, height: number) => void;
 }
 
 const GridView = memo(function GridView({
@@ -800,7 +905,9 @@ const GridView = memo(function GridView({
   onToggleFavorite,
   onContextMenu,
   reloadEpoch,
+  fileTagGetter,
   onInspect,
+  onDimensions,
 }: GridViewProps) {
   const top = scrollTop - OVERSCAN;
   const bottom = scrollTop + viewportHeight + OVERSCAN;
@@ -824,21 +931,29 @@ const GridView = memo(function GridView({
         });
       }
       const rowsStartY = section.offsetY + headerOffset;
-      for (let r = 0; r < section.rows; r++) {
+      // Rows are uniform height — compute the visible row window directly
+      // instead of iterating every row in the section (O(visible rows)).
+      const firstRow = Math.max(
+        0,
+        Math.ceil((top - rowsStartY - GRID_TILE_H) / (GRID_TILE_H + GAP)),
+      );
+      const lastRow = Math.min(
+        section.rows - 1,
+        Math.floor((bottom - rowsStartY) / (GRID_TILE_H + GAP)),
+      );
+      for (let r = firstRow; r <= lastRow; r++) {
         const rowY = rowsStartY + r * (GRID_TILE_H + GAP);
-        if (rowY + GRID_TILE_H >= top && rowY <= bottom) {
-          const startFileIdx = section.start + r * section.cols;
-          const endFileIdx = Math.min(
-            section.start + section.count,
-            startFileIdx + section.cols,
-          );
-          rows.push({
-            section,
-            rowIdx: r,
-            y: rowY,
-            files: allFiles.slice(startFileIdx, endFileIdx),
-          });
-        }
+        const startFileIdx = section.start + r * section.cols;
+        const endFileIdx = Math.min(
+          section.start + section.count,
+          startFileIdx + section.cols,
+        );
+        rows.push({
+          section,
+          rowIdx: r,
+          y: rowY,
+          files: allFiles.slice(startFileIdx, endFileIdx),
+        });
       }
     }
     return { headers, rows };
@@ -885,6 +1000,8 @@ const GridView = memo(function GridView({
                 onContextMenu={onContextMenu}
                 reloadEpoch={reloadEpoch}
                 onInspect={onInspect}
+                fileTags={fileTagGetter?.(file.filePath)}
+                onDimensions={onDimensions}
               />
             </div>
           ))}
@@ -948,11 +1065,18 @@ const ListView = memo(function ListView({
         headers.push({ label: section.label, count: section.count, y: section.offsetY });
       }
       const rowsStartY = section.offsetY + headerOffset;
-      for (let r = 0; r < section.count; r++) {
+      // Uniform rows — arithmetic window instead of scanning all rows.
+      const firstRow = Math.max(
+        0,
+        Math.ceil((top - rowsStartY - LIST_ROW_H) / LIST_ROW_H),
+      );
+      const lastRow = Math.min(
+        section.count - 1,
+        Math.floor((bottom - rowsStartY) / LIST_ROW_H),
+      );
+      for (let r = firstRow; r <= lastRow; r++) {
         const rowY = rowsStartY + r * LIST_ROW_H;
-        if (rowY + LIST_ROW_H >= top && rowY <= bottom) {
-          rows.push({ file: allFiles[section.start + r], y: rowY });
-        }
+        rows.push({ file: allFiles[section.start + r], y: rowY });
       }
     }
     return { headers, rows };
@@ -1183,35 +1307,111 @@ function InspectorTagManager({
 interface InspectorCardProps {
   file: MediaFile | null;
   onOpen: (file: MediaFile) => void;
+  /** Flat file list for index/total + prev/next navigation. */
+  allFiles: MediaFile[];
+  /** Select a file for inspection (nav arrows). */
+  onNavigate?: (file: MediaFile) => void;
+  /** Close the inspector (× button). */
+  onClose?: () => void;
+  /** Toolbar actions. */
+  onMove?: (file: MediaFile) => void;
+  onRename?: (file: MediaFile) => void;
+  onTrash?: (file: MediaFile) => void;
   /** Tag system props — v2.5 §Module 6.4 */
   tags?: TagDef[];
   fileTags?: TagDef[];
   onToggleFileTag?: (filePath: string, tagKey: string) => void;
 }
 
-const InspectorCard = memo(function InspectorCard({ file, onOpen, tags, fileTags, onToggleFileTag }: InspectorCardProps) {
+const InspectorCard = memo(function InspectorCard({
+  file,
+  onOpen,
+  allFiles,
+  onNavigate,
+  onClose,
+  onMove,
+  onRename,
+  onTrash,
+  tags,
+  fileTags,
+  onToggleFileTag,
+}: InspectorCardProps) {
+  type Insights = {
+    hash: string;
+    colors: Array<{ r: number; g: number; b: number; hex: string }>;
+    camera: { make?: string; model?: string; lens?: string; fNumber?: number; iso?: number; exposure?: string };
+  };
+  const [insights, setInsights] = useState<Insights | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  // Derive position in the flat list for the nav bar (e.g. "3 / 2400").
+  const index = file ? allFiles.findIndex((f) => f.filePath === file.filePath) : -1;
+  const total = allFiles.length;
+  const hasPrev = index > 0;
+  const hasNext = index >= 0 && index < total - 1;
+
+  const goPrev = () => { if (hasPrev && onNavigate) onNavigate(allFiles[index - 1]); };
+  const goNext = () => { if (hasNext && onNavigate) onNavigate(allFiles[index + 1]); };
+
+  // Fetch hash + colors + EXIF when file changes.
+  useEffect(() => {
+    setInsights(null);
+    if (!file) return;
+    let cancelled = false;
+    setLoading(true);
+    void window.scanAPI.getFileInsights(file.filePath).then((data) => {
+      if (!cancelled) { setInsights(data); setLoading(false); }
+    });
+    return () => { cancelled = true; };
+  }, [file]);
+
+  const hash = insights?.hash ?? "";
+
   return (
-    <div className="w-80 shrink-0 border border-nerv-border bg-nerv-panel p-4 flex flex-col gap-4 font-mono text-xs h-fit sticky top-0 eva-corner">
-      <div className="flex items-center justify-between">
-        <span className="eva-title text-nerv-orange font-bold tracking-wider text-[13px]">
-          INSPECTOR
+    <div className="w-full flex flex-col font-mono text-xs">
+      {/* A. Top navigation bar */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-nerv-border">
+        <span className="text-nerv-muted text-[10px] tabular-nums">
+          {file && index >= 0 ? `${index + 1} / ${total}` : "\u2014 / \u2014"}
         </span>
-        {file && (
-          <span
-            className={[
-              "tag-chip px-1.5 py-0.5 text-[10px] font-bold tracking-wider border",
-              file.fileType === "video"
-                ? "bg-nerv-green/20 border-nerv-green/50 text-nerv-green"
-                : "bg-nerv-cyan/20 border-nerv-cyan/50 text-nerv-cyan",
-            ].join(" ")}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={goPrev}
+            disabled={!hasPrev}
+            title="Previous"
+            aria-label="Previous"
+            className="w-6 h-6 flex items-center justify-center text-nerv-text-dim hover:text-nerv-amber disabled:opacity-30 disabled:hover:text-nerv-text-dim transition-colors"
           >
-            {file.fileType === "video" ? "VID" : "IMG"}
-          </span>
-        )}
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M15 18l-6-6 6-6" /></svg>
+          </button>
+          <button
+            type="button"
+            onClick={goNext}
+            disabled={!hasNext}
+            title="Next"
+            aria-label="Next"
+            className="w-6 h-6 flex items-center justify-center text-nerv-text-dim hover:text-nerv-amber disabled:opacity-30 disabled:hover:text-nerv-text-dim transition-colors"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M9 18l6-6-6-6" /></svg>
+          </button>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              title="Close inspector"
+              aria-label="Close inspector"
+              className="w-6 h-6 flex items-center justify-center text-nerv-text-dim hover:text-nerv-red transition-colors"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6 6 18M6 6l12 12" /></svg>
+            </button>
+          )}
+        </div>
       </div>
 
       {file ? (
-        <>
+        <div className="flex flex-col gap-3 p-3">
+          {/* B. Media preview card */}
           <div className="aspect-video w-full bg-nerv-bg overflow-hidden border border-nerv-border flex items-center justify-center relative">
             <img
               src={window.scanAPI.toMediaUrl(file.filePath)}
@@ -1220,21 +1420,42 @@ const InspectorCard = memo(function InspectorCard({ file, onOpen, tags, fileTags
               className="w-full h-full object-contain"
               draggable={false}
             />
-            {/* Corner reticle ticks */}
-            <span className="absolute top-1 left-1 w-2 h-2 border-t border-l border-nerv-orange/60" />
-            <span className="absolute top-1 right-1 w-2 h-2 border-t border-r border-nerv-orange/60" />
-            <span className="absolute bottom-1 left-1 w-2 h-2 border-b border-l border-nerv-orange/60" />
-            <span className="absolute bottom-1 right-1 w-2 h-2 border-b border-r border-nerv-orange/60" />
+            {/* Overlaid badges (top-left) */}
+            <div className="absolute top-1.5 left-1.5 flex gap-1">
+              <span className="tag-chip eva-cut bg-nerv-orange text-black text-[8px] font-bold tracking-wider px-1.5 py-0.5">
+                {plateId(file.filePath)}
+              </span>
+              {file.fileType === "video" ? (
+                <span className="tag-chip eva-cut bg-nerv-green text-black text-[8px] font-bold tracking-wider px-1.5 py-0.5">VID</span>
+              ) : (
+                <span className="tag-chip eva-cut bg-nerv-cyan text-black text-[8px] font-bold tracking-wider px-1.5 py-0.5">IMG</span>
+              )}
+            </div>
           </div>
+
+          {/* C. File title + directory path */}
           <div className="flex flex-col gap-1">
-            <span className="text-nerv-text font-bold break-all">
-              {file.fileName}
-            </span>
-            <span className="text-nerv-muted text-[10px] break-all">
-              {file.filePath}
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-nerv-text font-bold break-all leading-tight">
+                {file.fileName}
+              </span>
+              <button
+                type="button"
+                onClick={() => onOpen(file)}
+                title="Open in lightbox"
+                aria-label="Open in lightbox"
+                className="shrink-0 text-nerv-muted hover:text-nerv-amber transition-colors"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 3h6v6M10 14L21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" /></svg>
+              </button>
+            </div>
+            <span className="flex items-center gap-1 text-nerv-muted text-[10px]">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-nerv-orange/70 shrink-0"><path d="M3 7a2 2 0 0 1 2-2h3l2 2h4a2 2 0 0 1 2 2v1" /><rect x="3" y="9" width="18" height="11" /></svg>
+              <span className="truncate">{dirName(file.filePath)}</span>
             </span>
           </div>
-          {/* Interactive Tag Manager — v2.5 §Module 6.4 */}
+
+          {/* D. Tags section */}
           {tags && onToggleFileTag && (
             <InspectorTagManager
               tags={tags}
@@ -1243,33 +1464,129 @@ const InspectorCard = memo(function InspectorCard({ file, onOpen, tags, fileTags
               onToggleFileTag={onToggleFileTag}
             />
           )}
-          <div className="grid grid-cols-2 gap-2">
-            <Stat label="Dimensions" value={file.width > 0 && file.height > 0 ? `${file.width}x${file.height}` : "\u2014"} />
-            <Stat
-              label="File Size"
-              value={formatBytes(file.sizeBytes)}
-              valueClass="text-nerv-amber"
-            />
-            <Stat
- label="Megapixels"
-              value={
-                file.width > 0 && file.height > 0
-                  ? `${((file.width * file.height) / 1e6).toFixed(1)} MP`
-                  : "\u2014"
-              }
-            />
-            <Stat label="Date" value={formatDate(file.birthtimeMs)} />
+
+          {/* E. Action toolbar */}
+          {(onMove || onRename || onTrash) && (
+            <div className="grid grid-cols-3 border border-nerv-border">
+              {onMove && (
+                <button
+                  type="button"
+                  onClick={() => onMove(file)}
+                  title="Move"
+                  className="flex flex-col items-center gap-1 py-2 text-nerv-text-dim hover:text-nerv-lime hover:bg-nerv-lime/5 transition-colors border-r border-nerv-border"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 8h12M11 4l4 4-4 4M21 4v16" /></svg>
+                  <span className="text-[8px] font-bold tracking-wider">MOVE</span>
+                </button>
+              )}
+              {onRename && (
+                <button
+                  type="button"
+                  onClick={() => onRename(file)}
+                  title="Rename"
+                  className="flex flex-col items-center gap-1 py-2 text-nerv-text-dim hover:text-nerv-amber hover:bg-nerv-amber/5 transition-colors border-r border-nerv-border"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+                  <span className="text-[8px] font-bold tracking-wider">RENAME</span>
+                </button>
+              )}
+              {onTrash && (
+                <button
+                  type="button"
+                  onClick={() => onTrash(file)}
+                  title="Trash"
+                  className="flex flex-col items-center gap-1 py-2 text-nerv-text-dim hover:text-nerv-red hover:bg-nerv-red/5 transition-colors"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14" /></svg>
+                  <span className="text-[8px] font-bold tracking-wider">TRASH</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* F. Metadata key-value list */}
+          <div className="flex flex-col">
+            <StatRow label="Resolution" value={file.width > 0 && file.height > 0 ? `${file.width}x${file.height}` : "\u2014"} />
+            <StatRow label="Size" value={formatBytes(file.sizeBytes)} valueClass="text-nerv-cyan" />
+            <StatRow label="Aspect" value={file.width > 0 && file.height > 0 ? aspectRatio(file.width, file.height) : "\u2014"} />
+            <StatRow label="Megapixels" value={file.width > 0 && file.height > 0 ? `${((file.width * file.height) / 1e6).toFixed(1)} MP` : "\u2014"} />
+            <StatRow label="Created" value={formatDate(file.birthtimeMs)} />
           </div>
-          <button
-            type="button"
-            onClick={() => onOpen(file)}
-            className="eva-sqbtn w-full py-2 bg-nerv-orange text-nerv-bg font-bold hover:bg-nerv-orange/90 transition-colors"
-          >
-            LAUNCH FULL-SCREEN LIGHTBOX
-          </button>
-        </>
+
+          {/* G. Color spectrum — dominant colors + gradient bar */}
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[9px] font-bold tracking-[0.2em] text-nerv-muted uppercase">Color Spectrum</span>
+            {loading && !insights ? (
+              <div className="h-8 bg-nerv-bg border border-nerv-border animate-pulse" />
+            ) : insights && insights.colors.length > 0 ? (
+              <>
+                {/* Gradient spectrum bar built from extracted swatches */}
+                <div
+                  className="h-6 w-full border border-nerv-border"
+                  style={{
+                    background: `linear-gradient(90deg, ${insights.colors.map((c) => c.hex).join(", ")})`,
+                  }}
+                />
+                {/* Individual swatch chips */}
+                <div className="flex gap-1">
+                  {insights.colors.map((c, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => void window.scanAPI.writeClipboard(c.hex)}
+                      title={`Copy ${c.hex}`}
+                      className="flex-1 group/swatch flex flex-col items-center gap-0.5"
+                    >
+                      <span
+                        className="w-full h-8 border border-nerv-border group-hover/swatch:border-nerv-amber transition-colors"
+                        style={{ backgroundColor: c.hex }}
+                      />
+                      <span className="text-[8px] text-nerv-muted group-hover/swatch:text-nerv-amber transition-colors uppercase">{c.hex}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="h-8 flex items-center justify-center text-[9px] text-nerv-muted border border-nerv-border bg-nerv-bg">
+                No color data
+              </div>
+            )}
+          </div>
+
+          {/* H. Camera info (EXIF) */}
+          <div className="flex flex-col">
+            <span className="text-[9px] font-bold tracking-[0.2em] text-nerv-muted uppercase mb-1">Camera</span>
+            <StatRow label="Make" value={insights?.camera.make || "\u2014"} />
+            <StatRow label="Model" value={insights?.camera.model || "\u2014"} />
+            <StatRow label="Lens" value={insights?.camera.lens || "\u2014"} />
+            <StatRow label="Aperture" value={insights?.camera.fNumber ? `f/${insights.camera.fNumber}` : "\u2014"} />
+            <StatRow label="ISO" value={insights?.camera.iso != null ? String(insights.camera.iso) : "\u2014"} />
+            <StatRow label="Exposure" value={insights?.camera.exposure ? `${insights.camera.exposure}s` : "\u2014"} />
+          </div>
+
+          {/* G. Hash section */}
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <span className="text-[9px] font-bold tracking-[0.2em] text-nerv-muted uppercase">Hash</span>
+              {hash && (
+                <button
+                  type="button"
+                  onClick={() => void window.scanAPI.writeClipboard(hash)}
+                  title="Copy hash"
+                  className="flex items-center gap-1 text-[9px] text-nerv-muted hover:text-nerv-amber transition-colors"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="1" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
+                  COPY
+                </button>
+              )}
+            </div>
+            <div className="bg-nerv-bg border border-nerv-border px-2 py-1.5 text-nerv-text-dim text-[10px] break-all">
+              {hash || "\u2014"}
+            </div>
+          </div>
+        </div>
       ) : (
-        <div className="text-nerv-muted text-center py-8">
+        <div className="text-nerv-muted text-center py-12">
           Select a media item to inspect.
         </div>
       )}
@@ -1277,7 +1594,8 @@ const InspectorCard = memo(function InspectorCard({ file, onOpen, tags, fileTags
   );
 });
 
-const Stat = memo(function Stat({
+/** Key-value metadata row — label left (muted), value right (bright). */
+const StatRow = memo(function StatRow({
   label,
   value,
   valueClass,
@@ -1287,11 +1605,23 @@ const Stat = memo(function Stat({
   valueClass?: string;
 }) {
   return (
-    <div className="bg-nerv-bg p-2.5 border border-nerv-border text-[11px]">
-      <div className="text-nerv-muted text-[9px] uppercase tracking-wider">
-        {label}
-      </div>
-      <div className={valueClass ?? "text-nerv-text"}>{value}</div>
+    <div className="flex items-center justify-between py-1 border-b border-nerv-border/40 last:border-b-0">
+      <span className="text-nerv-muted text-[10px]">{label}</span>
+      <span className={`text-nerv-text text-[10px] truncate ml-2 ${valueClass ?? ""}`}>{value}</span>
     </div>
   );
 });
+
+/** Derive the parent directory name from a full path. */
+function dirName(filePath: string): string {
+  const sep = filePath.includes("/") ? "/" : "\\";
+  const parts = filePath.split(sep).filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 2] : parts[0] ?? filePath;
+}
+
+/** Format WxH as a simplified aspect ratio (e.g. "3:2", "16:9"). */
+function aspectRatio(w: number, h: number): string {
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+  const g = gcd(w, h);
+  return `${w / g}:${h / g}`;
+}

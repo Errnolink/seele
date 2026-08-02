@@ -20,9 +20,13 @@ export interface SidebarProps {
   totalFolders: number;
   selectedFolder: string | null;
   onSelectFolder: (p: string | null) => void;
+  /** Folders hidden from the grid (grayed out in the tree). */
+  hiddenFolders?: Set<string>;
   typeFilter: MediaTypeFilter;
   onTypeFilterChange: (t: MediaTypeFilter) => void;
   stats: ScanStats;
+  /** Count of starred/favorite files (the Set lives in App). */
+  favoriteCount: number;
   /** Move selected files to a directory (drag-to-folder support). */
   onDropFiles?: (filePaths: string[], destDir: string) => void;
   /** Currently selected file IDs (for the drag source). */
@@ -35,22 +39,19 @@ export interface SidebarProps {
   onRemoveTag?: (key: string) => void;
   onToggleActiveTag?: (key: string) => void;
 }
-
-/** A quick-view filter button definition (§7.2 table). */
+/** A quick-view filter button definition. */
 interface QuickView {
   key: MediaTypeFilter;
   label: string;
-  /** Bevel fill class when active. */
-  fill: string;
   /** True when this row also clears the folder selection. */
   clearFolder?: boolean;
 }
 
 const QUICK_VIEWS: QuickView[] = [
-  { key: "all", label: "ALL MEDIA ASSETS", fill: "eva-fill-amber", clearFolder: true },
-  { key: "image", label: "STILL IMAGES", fill: "eva-fill-cyan" },
-  { key: "video", label: "VIDEO TAKES", fill: "eva-fill-green" },
-  { key: "favorite", label: "PRIORITY STARRED", fill: "eva-fill-amber" },
+  { key: "all", label: "ALL ASSETS", clearFolder: true },
+  { key: "image", label: "STILL IMAGES" },
+  { key: "video", label: "VIDEO" },
+  { key: "favorite", label: "STARRED" },
 ];
 
 /* --------------------------- SectionLabel helper -------------------------- */
@@ -65,25 +66,24 @@ function SectionLabel({
   return (
     <div className="flex items-center gap-2 select-none">
       <span
-        className={`w-1 h-3 bg-nerv-lime shadow-[0_0_6px_#c9e98a] ${
+        className={`w-1 h-3 bg-nerv-amber shadow-[0_0_6px_#ffb700] ${
           pulse ? "animate-pulse-soft" : ""
         }`}
       />
-      <span className="text-[9px] font-bold tracking-[0.25em] phosphor-lime whitespace-nowrap">
+      <span className="text-[9px] font-bold tracking-[0.25em] text-nerv-amber whitespace-nowrap">
         {children}
       </span>
-      <span className="h-px flex-1 bg-gradient-to-r from-nerv-purple/50 to-transparent" />
+      <span className="h-px flex-1 bg-gradient-to-r from-nerv-amber/40 to-transparent" />
     </div>
   );
 }
-
-/* ------------------------------ Quick Views ------------------------------- */
 
 interface QuickViewsProps {
   typeFilter: MediaTypeFilter;
   onTypeFilterChange: (t: MediaTypeFilter) => void;
   onSelectFolder: (p: string | null) => void;
   stats: ScanStats;
+  favoriteCount: number;
 }
 
 const QuickViews = memo(function QuickViews({
@@ -91,26 +91,27 @@ const QuickViews = memo(function QuickViews({
   onTypeFilterChange,
   onSelectFolder,
   stats,
+  favoriteCount,
 }: QuickViewsProps) {
-  // Count per quick view. `all`/`favorite` share the file total; the per-type
-  // figures come straight from the aggregate stats.
+  // Count per quick view — `favorite` reads the real favorites Set size.
   const countFor = (key: MediaTypeFilter): number => {
     switch (key) {
       case "all":
-      case "favorite":
         return stats.totalFiles;
       case "image":
         return stats.imageCount;
       case "video":
         return stats.videoCount;
+      case "favorite":
+        return favoriteCount;
       default:
         return stats.totalFiles;
     }
   };
 
   return (
-    <div className="p-3 border-b border-nerv-purple/25 flex flex-col gap-2.5">
-      <SectionLabel pulse>MEDIA CLASSIFICATION</SectionLabel>
+    <div className="p-3 border-b border-nerv-border/60 flex flex-col gap-2.5">
+      <SectionLabel>TYPE</SectionLabel>
       <div className="flex flex-col gap-1.5">
         {QUICK_VIEWS.map((qv) => {
           const active = typeFilter === qv.key;
@@ -124,24 +125,16 @@ const QuickViews = memo(function QuickViews({
                 onTypeFilterChange(qv.key);
                 if (qv.clearFolder) onSelectFolder(null);
               }}
-              className={`eva-ticket relative flex items-center gap-2 h-8 px-2.5 text-[10px] font-bold tracking-[0.18em] uppercase transition-[filter] duration-150 ${
-                active ? qv.fill : "eva-dim"
+              className={`relative flex items-center gap-2 h-8 px-2.5 text-[10px] font-bold tracking-[0.18em] uppercase transition-colors border ${
+                active
+                  ? "border-nerv-amber/60 bg-nerv-amber/10 text-nerv-amber"
+                  : "border-nerv-border/60 text-nerv-text-dim hover:border-nerv-amber/40 hover:text-nerv-text"
               }`}
             >
-              {/* semantic marker glyph (square chip) */}
-              <span
-                className={`w-2 h-2 shrink-0 ${
-                  qv.key === "image"
-                    ? "bg-nerv-cyan shadow-[0_0_6px_#20f0ff]"
-                    : qv.key === "video"
-                    ? "bg-nerv-green shadow-[0_0_6px_#50ff50]"
-                    : "bg-nerv-amber shadow-[0_0_6px_#ffb700]"
-                }`}
-              />
               <span className="flex-1 text-left">{qv.label}</span>
               <span
                 className={`font-mono text-[10px] tabular-nums tracking-normal ${
-                  active ? "phosphor-lime" : "phosphor-dim"
+                  active ? "text-nerv-amber" : "text-nerv-muted"
                 }`}
               >
                 {pad(countFor(qv.key), 3)}
@@ -166,6 +159,7 @@ interface FolderTreeNodeProps {
   filter: string;
   onDropFiles?: (filePaths: string[], destDir: string) => void;
   selectedIds?: Set<string>;
+  hiddenFolders?: Set<string>;
   /** Root tree total size (bytes) for computing capacity percentages. */
   rootSize?: number;
 }
@@ -182,12 +176,14 @@ const FolderTreeNode = memo(function FolderTreeNode({
   filter,
   onDropFiles,
   selectedIds,
+  hiddenFolders,
   rootSize,
 }: FolderTreeNodeProps) {
   const hasChildren = node.children.length > 0;
   const isOpen = expanded.has(node.path);
   const selected = selectedFolder === node.path;
   const [isDropTarget, setIsDropTarget] = useState(false);
+  const isHidden = hiddenFolders?.has(node.path) ?? false;
 
   return (
     <div>
@@ -223,7 +219,7 @@ const FolderTreeNode = memo(function FolderTreeNode({
           selected
             ? "phosphor-lime font-bold"
             : "text-nerv-muted hover:text-nerv-lime/80"
-        } ${isDropTarget ? "bg-nerv-lime/20 ring-1 ring-nerv-lime/50" : ""}`}
+        } ${isDropTarget ? "bg-nerv-lime/20 ring-1 ring-nerv-lime/50" : ""} ${isHidden ? "opacity-40" : ""}`}
       >
         {/* 2px lime selection marker */}
         {selected && (
@@ -297,6 +293,7 @@ const FolderTreeNode = memo(function FolderTreeNode({
               filter={filter}
               onDropFiles={onDropFiles}
               selectedIds={selectedIds}
+              hiddenFolders={hiddenFolders}
               rootSize={rootSize}
             />
           ))}
@@ -317,6 +314,7 @@ interface DirectoryExplorerProps {
   setExpanded: React.Dispatch<React.SetStateAction<Set<string>>>;
   onDropFiles?: (filePaths: string[], destDir: string) => void;
   selectedIds?: Set<string>;
+  hiddenFolders?: Set<string>;
 }
 
 const DirectoryExplorer = memo(function DirectoryExplorer({
@@ -328,10 +326,13 @@ const DirectoryExplorer = memo(function DirectoryExplorer({
   setExpanded,
   onDropFiles,
   selectedIds,
+  hiddenFolders,
 }: DirectoryExplorerProps) {
   const [filterRaw, setFilterRaw] = useState("");
   // Keep typing responsive; defer the (potentially deep) subtree filter.
   const filter = useDeferredValue(filterRaw.trim().toLowerCase());
+  // Filter input collapses to a magnifier by default; expands on click.
+  const [searchOpen, setSearchOpen] = useState(false);
 
   /** Collect every descendant path under `node` (inclusive). */
   const collectPaths = (node: FolderNode): string[] => {
@@ -370,7 +371,7 @@ const DirectoryExplorer = memo(function DirectoryExplorer({
 
   return (
     <>
-      <div className="p-3 border-b border-nerv-purple/25 flex flex-col gap-2">
+      <div className="p-3 border-b border-nerv-border/60 flex flex-col gap-2">
         <div className="flex items-center gap-2">
           <div className="flex-1 min-w-0">
             <SectionLabel>DIRECTORY // {pad(totalFolders, 3)}</SectionLabel>
@@ -380,34 +381,66 @@ const DirectoryExplorer = memo(function DirectoryExplorer({
             title="Expand all"
             aria-label="Expand all folders"
             onClick={expandAll}
-            className="eva-sqbtn shrink-0 text-nerv-muted hover:text-nerv-lime"
+            className="shrink-0 text-[9px] font-bold tracking-[0.15em] text-nerv-muted hover:text-nerv-amber transition-colors uppercase"
           >
-            +
+            EXP
           </button>
           <button
             type="button"
             title="Collapse all"
             aria-label="Collapse all folders"
             onClick={collapseAll}
-            className="eva-sqbtn shrink-0 text-nerv-muted hover:text-nerv-lime"
+            className="shrink-0 text-[9px] font-bold tracking-[0.15em] text-nerv-muted hover:text-nerv-amber transition-colors uppercase"
           >
-            −
+            COL
           </button>
         </div>
 
-        {/* folder filter input */}
-        <div className="eva-frame">
-          <div className="eva-inner flex items-center gap-1.5 h-7 px-2">
-            <span className="phosphor-lime shrink-0">&gt;</span>
+        {/* folder filter input — icon-triggered, collapsed by default */}
+        {searchOpen ? (
+          <div className="flex items-center gap-2 h-7 bg-nerv-bg border border-nerv-amber/40 px-2">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0 text-nerv-amber">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.3-4.3" />
+            </svg>
             <input
+              autoFocus
               value={filterRaw}
               onChange={(e) => setFilterRaw(e.target.value)}
+              onBlur={() => { if (!filterRaw.trim()) setSearchOpen(false); }}
+              onKeyDown={(e) => { if (e.key === "Escape") { setFilterRaw(""); setSearchOpen(false); } }}
               placeholder="FILTER.DIR"
               spellCheck={false}
-              className="flex-1 min-w-0 bg-transparent outline-none phosphor-lime placeholder:text-nerv-muted/60 text-[10px] font-mono tracking-wider"
+              className="flex-1 min-w-0 bg-transparent outline-none text-nerv-amber placeholder:text-nerv-muted/60 text-[10px] font-mono tracking-wider"
             />
+            <button
+              type="button"
+              onClick={() => { setFilterRaw(""); setSearchOpen(false); }}
+              className="text-nerv-muted hover:text-nerv-text shrink-0"
+              aria-label="Close filter"
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
+            </button>
           </div>
-        </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setSearchOpen(true)}
+            title="Filter directories"
+            aria-label="Filter directories"
+            className={`flex items-center gap-2 h-7 px-2 border transition-colors ${
+              filter
+                ? "border-nerv-amber/40 text-nerv-amber bg-nerv-amber/5"
+                : "border-nerv-border/60 text-nerv-muted hover:text-nerv-amber hover:border-nerv-amber/40"
+            }`}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.3-4.3" />
+            </svg>
+            <span className="text-[9px] font-bold tracking-[0.15em] uppercase">{filter ? filterRaw : "FILTER.DIR"}</span>
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-2">
@@ -431,6 +464,7 @@ const DirectoryExplorer = memo(function DirectoryExplorer({
             filter={filter}
             onDropFiles={onDropFiles}
             selectedIds={selectedIds}
+            hiddenFolders={hiddenFolders}
             rootSize={visible.tree.size}
           />
         ) : (
@@ -474,20 +508,24 @@ const TagSection = memo(function TagSection({
   };
 
   return (
-    <div className="border-t border-nerv-purple/25 flex flex-col">
+    <div className="border-t border-nerv-border/60 flex flex-col">
       {/* Collapsible header */}
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
         className="flex items-center gap-2 px-3 py-2 hover:bg-nerv-panel-2/50 transition-colors w-full"
       >
-        <span className="text-[10px] font-mono text-nerv-muted">
-          {collapsed ? "\u25B8" : "\u25BE"}
+        <span
+          className={`text-[9px] text-nerv-muted transition-transform ${
+            collapsed ? "" : "rotate-90"
+          }`}
+        >
+          ▸
         </span>
-        <span className="text-[9px] font-bold tracking-[0.25em] phosphor-lime">
+        <span className="text-[9px] font-bold tracking-[0.25em] text-nerv-amber">
           TAGS
         </span>
-        <span className="h-px flex-1 bg-gradient-to-r from-nerv-purple/40 to-transparent" />
+        <span className="h-px flex-1 bg-gradient-to-r from-nerv-amber/40 to-transparent" />
         <span className="text-[9px] font-mono text-nerv-muted tabular-nums">
           {tags.length}
         </span>
@@ -623,7 +661,7 @@ const StorageTelemetry = memo(function StorageTelemetry({
   }, []);
 
   return (
-    <div className="border-t border-nerv-purple/20 p-3 bg-black/40 flex flex-col gap-2">
+    <div className="border-t border-nerv-border/60 p-3 bg-black/40 flex flex-col gap-2">
       <SectionLabel>STORAGE // TELEMETRY</SectionLabel>
 
       <div className="flex items-center justify-between text-[10px] font-mono">
@@ -665,7 +703,7 @@ const StorageTelemetry = memo(function StorageTelemetry({
 
       {/* status line */}
       <div className="flex items-center gap-1.5 text-[10px] font-mono">
-        <span className="w-1.5 h-1.5 rounded-full bg-nerv-lime shadow-[0_0_8px_#c9e98a] animate-pulse-soft" />
+        <span className="w-1.5 h-1.5 rounded-full bg-nerv-amber shadow-[0_0_8px_#ffb700] animate-pulse-soft" />
         <span className="phosphor-dim tracking-[0.2em]">MAGI.LINK NOMINAL</span>
       </div>
     </div>
@@ -679,10 +717,12 @@ function SidebarInner({
   tree,
   totalFolders,
   selectedFolder,
+  hiddenFolders,
   onSelectFolder,
   typeFilter,
   onTypeFilterChange,
   stats,
+  favoriteCount,
   onDropFiles,
   selectedIds,
   tags,
@@ -699,25 +739,22 @@ function SidebarInner({
     <aside
       className={`shrink-0 h-full transition-all duration-300 overflow-hidden ${
         open ? "w-64" : "w-0"
-      } border-r border-nerv-purple/40`}
-      style={{
-        background:
-          "linear-gradient(180deg, rgba(88,28,135,0.18) 0%, rgba(10,8,20,0.6) 100%)",
-      }}
+      } border-r border-nerv-border/60 bg-nerv-panel`}
       aria-label="Sidebar"
     >
-      {/* fixed-width inner wrapper so nothing reflows during the width anim */}
       <div className="w-64 h-full flex flex-col">
         <QuickViews
           typeFilter={typeFilter}
           onTypeFilterChange={onTypeFilterChange}
           onSelectFolder={onSelectFolder}
           stats={stats}
+          favoriteCount={favoriteCount}
         />
 
         <DirectoryExplorer
           tree={tree}
           totalFolders={totalFolders}
+          hiddenFolders={hiddenFolders}
           selectedFolder={selectedFolder}
           onSelectFolder={onSelectFolder}
           expanded={expanded}

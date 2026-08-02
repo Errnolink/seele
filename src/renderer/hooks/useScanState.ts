@@ -206,11 +206,13 @@ export interface UseScanStateReturn {
 export function useScanState(): UseScanStateReturn {
   const [state, dispatch] = useReducer(scanReducer, initialState);
 
-  // Flatten once per version change. `.flat()` is O(total) but runs only
-  // when a batch landed, not cumulatively inside the reducer on every batch.
+  // Flatten once per batch mutation. The reducer always returns a fresh
+  // `batches` array reference whenever the accumulated data changes, so
+  // the memo recomputes exactly when files are added/removed — no need to
+  // also key on the `filesVersion` counter.
   const files = useMemo(
     () => state.batches.flat(),
-    [state.filesVersion, state.batches],
+    [state.batches],
   );
 
   const onStart = useCallback(() => dispatch({ type: "start" }), []);
@@ -262,10 +264,22 @@ export function useScanState(): UseScanStateReturn {
     dispatch({ type: "done" });
   }, []);
 
-  const onProgress = useCallback(
-    (progress: ScanProgress) => dispatch({ type: "progress", progress }),
-    [],
-  );
+  const onProgress = useCallback((progress: ScanProgress) => {
+    // Progress messages arrive faster than the UI can paint. Coalesce
+    // last-write-wins on the same 150ms cadence as batches — intermediate
+    // snapshots are dropped instead of forcing a reducer pass + re-render
+    // for every message (a fast scan emits dozens per second).
+    progressRef.current = progress;
+    if (progressTimerRef.current) return;
+    progressTimerRef.current = setTimeout(() => {
+      progressTimerRef.current = null;
+      const latest = progressRef.current;
+      progressRef.current = null;
+      if (latest) dispatch({ type: "progress", progress: latest });
+    }, 150);
+  }, []);
+  const progressRef = useRef<ScanProgress | null>(null);
+  const progressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onError = useCallback(
     (message: string) => dispatch({ type: "error", message }),
     [],

@@ -44,6 +44,9 @@ const DEFAULT_TAGS: TagDef[] = [
 const STORAGE_TAGS = "wiergise:tags";
 const STORAGE_ASSIGN = "wiergise:tagAssignments";
 
+/** Shared immutable empty result — avoids per-call allocations. */
+const EMPTY_TAGS: TagDef[] = [];
+
 function loadTags(): TagDef[] {
   try {
     const raw = localStorage.getItem(STORAGE_TAGS);
@@ -166,14 +169,29 @@ export function useTags() {
 
   const clearActiveTags = useCallback(() => setActiveTags(new Set()), []);
 
-  /** Get tags assigned to a file. */
+  // Precomputed per-file resolved tags. Rebuilt only when tags/assignments
+  // change; getFileTags then answers in O(1) with a STABLE array reference
+  // — the previous per-call `tags.filter(...)` allocated a fresh array for
+  // every visible tile on every render (hot path in the masonry grid).
+  const tagCache = useMemo(() => {
+    const cache = new Map<string, TagDef[]>();
+    const defByKey = new Map(tags.map((t) => [t.key, t]));
+    for (const [path, keys] of assignments) {
+      if (keys.size === 0) continue;
+      const defs: TagDef[] = [];
+      for (const k of keys) {
+        const def = defByKey.get(k);
+        if (def) defs.push(def);
+      }
+      cache.set(path, defs.length > 0 ? defs : EMPTY_TAGS);
+    }
+    return cache;
+  }, [tags, assignments]);
+
+  /** Get tags assigned to a file — O(1) map hit, stable array reference. */
   const getFileTags = useCallback(
-    (filePath: string): TagDef[] => {
-      const tagKeys = assignments.get(filePath);
-      if (!tagKeys || tagKeys.size === 0) return [];
-      return tags.filter((t) => tagKeys.has(t.key));
-    },
-    [assignments, tags],
+    (filePath: string): TagDef[] => tagCache.get(filePath) ?? EMPTY_TAGS,
+    [tagCache],
   );
 
   /** Count how many files have each tag. */

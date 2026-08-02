@@ -9,7 +9,7 @@ import {
   shell,
   clipboard,
 } from "electron";
-import sharp from "sharp";
+import sharp, { type Metadata } from "sharp";
 import path from "node:path";
 import fs from "node:fs";
 import { execFile } from "node:child_process";
@@ -213,8 +213,9 @@ function thumbDiskPath(cacheKey: string): string {
 }
 
 /** Store a thumbnail in both tiers (RAM LRU + disk) and run eviction.
- *  The disk write is best-effort — a failure just means the next request
- *  re-extracts; it never blocks serving the response. */
+ *  The disk write is async + best-effort — a failure just means the next
+ *  request re-extracts; it never blocks serving the response or the main
+ *  process event loop (sync writes here froze scrolling on cold caches). */
 function storeThumb(cacheKey: string, bytes: Uint8Array): void {
   thumbCache.set(cacheKey, bytes);
   if (thumbCache.size > THUMB_CACHE_MAX) {
@@ -222,18 +223,18 @@ function storeThumb(cacheKey: string, bytes: Uint8Array): void {
     if (oldest !== undefined) thumbCache.delete(oldest);
   }
   const p = thumbDiskPath(cacheKey);
-  try {
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, bytes);
-  } catch (e) {
-    if (!app.isPackaged) console.debug("[media] thumb disk write failed:", e);
-  }
+  fs.promises
+    .mkdir(path.dirname(p), { recursive: true })
+    .then(() => fs.promises.writeFile(p, bytes))
+    .catch((e) => {
+      if (!app.isPackaged) console.debug("[media] thumb disk write failed:", e);
+    });
 }
 
 /** Look up a thumbnail across both tiers. On a RAM miss, checks disk and
  *  backfills the RAM LRU so subsequent hits are fast. Returns null if
- *  absent from both. */
-function lookupThumb(cacheKey: string): Uint8Array | null {
+ *  absent from both. Async — the disk read never blocks the event loop. */
+async function lookupThumb(cacheKey: string): Promise<Uint8Array | null> {
   const ramHit = thumbCache.get(cacheKey);
   if (ramHit) {
     thumbCache.delete(cacheKey);
@@ -241,7 +242,8 @@ function lookupThumb(cacheKey: string): Uint8Array | null {
     return ramHit;
   }
   try {
-    const diskHit = new Uint8Array(fs.readFileSync(thumbDiskPath(cacheKey)));
+    const buf = await fs.promises.readFile(thumbDiskPath(cacheKey));
+    const diskHit = new Uint8Array(buf);
     // Backfill RAM without re-evicting just for a disk promotion — only
     // store if there's room; otherwise the disk copy still serves us.
     if (thumbCache.size < THUMB_CACHE_MAX) thumbCache.set(cacheKey, diskHit);
@@ -300,12 +302,14 @@ function withFfmpegLimit<T>(fn: () => Promise<T>): Promise<T> {
   else ffmpegQueue.push(run);
   return promise;
 }
-/** Locate ffmpeg on the system PATH. Cached after first lookup. */
+/** Locate ffmpeg on the system PATH. Cached after first lookup.
+ *  `where` is Windows-only; macOS/Linux use `which`. */
 let ffmpegPath: string | null | undefined;
 async function findFfmpeg(): Promise<string | null> {
   if (ffmpegPath !== undefined) return ffmpegPath;
   const { promise, resolve } = Promise.withResolvers<string | null>();
-  const proc = execFile("where", ["ffmpeg"], { timeout: 3000 }, (err, stdout) => {
+  const cmd = process.platform === "win32" ? "where" : "which";
+  const proc = execFile(cmd, ["ffmpeg"], { timeout: 3000 }, (err, stdout) => {
     if (err || !stdout.trim()) { ffmpegPath = null; return resolve(null); }
     ffmpegPath = stdout.trim().split(/\r?\n/)[0];
     resolve(ffmpegPath);
@@ -322,7 +326,7 @@ async function serveVideoThumb(
   w: number,
 ): Promise<Response | null> {
   const cacheKey = `${requested}?w=${w}&vid=1`;
-  const cached = lookupThumb(cacheKey);
+  const cached = await lookupThumb(cacheKey);
   if (cached) {
     return new Response(cached as unknown as BodyInit, {
       headers: { "Content-Type": sniffThumbType(cached), "Cache-Control": "public, max-age=86400" },
@@ -373,7 +377,7 @@ async function serveResized(
   w: number,
 ): Promise<Response | null> {
   const cacheKey = `${requested}?w=${w}`;
-  const cached = lookupThumb(cacheKey);
+  const cached = await lookupThumb(cacheKey);
   if (cached) {
     return new Response(cached as unknown as BodyInit, {
       headers: {
@@ -431,7 +435,14 @@ app.whenReady().then(() => {
     // when the CWD is on a different drive — strip the leading slash so the
     // absolute path is honored verbatim (v2 review bug #2). On Linux/macOS
     // the leading slash IS the absolute root and must be preserved (V5 SEC-1).
-    const rawPath = decodeURIComponent(url.pathname);
+    let rawPath: string;
+    try {
+      rawPath = decodeURIComponent(url.pathname);
+    } catch {
+      // Malformed percent-encoding — reject instead of throwing inside the
+      // protocol handler.
+      return new Response("Bad Request", { status: 400 });
+    }
     const raw = process.platform === "win32" ? rawPath.replace(/^\//, "") : rawPath;
     const requested = path.resolve(raw);
     if (!path.isAbsolute(requested)) {
@@ -557,6 +568,12 @@ ipcMain.handle("scan:start", async (event, folderPath: string) => {
 
   const child = utilityProcess.fork(path.join(__dirname, "scanWorker.js"), [], {
     stdio: "pipe",
+    // libuv's default threadpool is 4 threads; our Phase 2 async pool
+    // dispatches 16 concurrent fs ops, but without a larger threadpool
+    // the OS only services 4 at a time — bottlenecking disk I/O for
+    // large libraries (30k+ files). 16 threads matches the scanner's
+    // concurrency, so stat+probe actually parallelizes.
+    env: { ...process.env, UV_THREADPOOL_SIZE: "16" },
   });
   child.stdout?.on("data", (d: Buffer) =>
     console.log(`[scanWorker] ${d.toString().trimEnd()}`),
@@ -720,6 +737,164 @@ ipcMain.handle("shell:openPath", async (_e, filePath: string) => {
 /** Write text to the system clipboard. */
 ipcMain.handle("clipboard:writeText", (_e, text: string) => {
   if (typeof text === "string") clipboard.writeText(text);
+});
+
+/** Inspector insights: content hash, dominant colors, and EXIF camera info. */
+interface FileInsights {
+  hash: string;
+  colors: Array<{ r: number; g: number; b: number; hex: string }>;
+  camera: { make?: string; model?: string; lens?: string; fNumber?: number; iso?: number; exposure?: string };
+}
+
+/** Parse a raw EXIF Buffer (from sharp metadata) into camera fields. */
+function parseExif(buf: Buffer | undefined): FileInsights["camera"] {
+  const cam: FileInsights["camera"] = {};
+  if (!buf || buf.length < 14) return cam;
+  // EXIF text tags are ASCII-null-terminated; extract by tag marker scan.
+  const ascii = (start: number, len: number): string =>
+    buf.toString("latin1", start, start + len).replace(/\0.*$/, "").trim();
+  // Scan for known tag labels in the TIFF/EXIF ASCII entries.
+  const find = (label: string): string | undefined => {
+    const idx = buf.indexOf(label, 12, "latin1");
+    if (idx === -1) return undefined;
+    // The ASCII value follows the 12-byte IFD entry (tag 2 bytes + type 2 + count 4 + value/offset 4).
+    // For long ASCII values the last 4 bytes are an offset; for short ones inline. Scan forward for printable text.
+    for (let p = idx + label.length; p < Math.min(idx + 256, buf.length - 4); p++) {
+      if (buf[p] >= 0x20 && buf[p] < 0x7f) return ascii(p, 64);
+    }
+    return undefined;
+  };
+  cam.make = find("Make");
+  cam.model = find("Model");
+  cam.lens = find("LensModel") ?? find("Lens");
+  // Numeric tags: search for the rational values is complex; do best-effort regex on latin1 dump.
+  const dump = buf.toString("latin1");
+  const grabNum = (re: RegExp): number | undefined => {
+    const m = dump.match(re);
+    return m ? Number(m[1]) : undefined;
+  };
+  cam.fNumber = grabNum(/FNumber[^\d]{0,8}(\d+(?:\.\d+)?)/);
+  cam.iso = grabNum(/ISO[^\d]{0,8}(\d{2,6})/);
+  const expMatch = dump.match(/ExposureTime[^\d]{0,8}(\d+)\/(\d+)/);
+  cam.exposure = expMatch ? `${expMatch[1]}/${expMatch[2]}` : undefined;
+  return cam;
+}
+
+/** Read (or build) a decodeable image buffer for color/EXIF analysis.
+ *  Images: the raw file. Videos: a single ffmpeg-extracted frame.
+ *  Returns null when no decoder is available. */
+async function decodeBufferForInsights(
+  filePath: string,
+): Promise<{ buf: Buffer; meta: Metadata } | null> {
+  const isVideo = /\.(mp4|mov|avi|mkv|webm|m4v|wmv|flv|mpg|mpeg|3gp)$/i.test(filePath);
+  if (!isVideo) {
+    try {
+      // Async read — never block the event loop on a multi-GB original.
+      const buf = await fs.promises.readFile(filePath);
+      // Downscale before computing stats: the 4 sharp .stats() calls in the
+      // insights handler each decode the full-res buffer, pegging CPU and
+      // ballooning RAM on multi-MP originals. A 320px JPEG carries the same
+      // perceptual palette for dominant/quadrant swatches.
+      const preview = await withSharpLimit(() =>
+        sharp(buf).resize({ width: 320, withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer(),
+      );
+      // Metadata must describe the preview, not the original — quadrant
+      // extraction below is done against the preview buffer.
+      const meta = await sharp(preview).metadata();
+      return { buf: preview, meta };
+    } catch {
+      return null;
+    }
+  }
+  // Video: extract one frame at ~1s into a JPEG buffer.
+  const ff = await findFfmpeg();
+  if (!ff) return null;
+  const tmpFile = path.join(tmpdir(), `wiergise-insight-${randomBytes(6).toString("hex")}.jpg`);
+  try {
+    await withFfmpegLimit(() =>
+      new Promise<void>((resolve, reject) => {
+        const proc = execFile(
+          ff,
+          ["-ss", "1", "-i", filePath, "-frames:v", "1",
+           "-vf", "scale=320:-2", "-q:v", "3", "-update", "1", "-y", tmpFile],
+          { timeout: 8000, windowsHide: true },
+          (err) => { if (err) reject(err); else resolve(); },
+        );
+        proc.on("error", reject);
+      }),
+    );
+    const buf = await fs.promises.readFile(tmpFile);
+    const meta = await sharp(buf).metadata();
+    return { buf, meta };
+  } catch {
+    return null;
+  } finally {
+    fs.promises.unlink(tmpFile).catch(() => {});
+  }
+}
+
+ipcMain.handle("file:insights", async (_e, filePath: string): Promise<FileInsights | null> => {
+  if (typeof filePath !== "string" || filePath.length === 0) return null;
+  if (!isUnderAllowedRoot(path.resolve(filePath))) return null;
+  try {
+    // Partial hash: first 64KB + last 64KB + size. Full-file read of a 2GB
+    // video blocks the event loop and spikes RAM for no perceptual gain.
+    const stat = fs.statSync(filePath);
+    const CHUNK = 64 * 1024;
+    const hasher = createHash("sha1");
+    const fd = fs.openSync(filePath, "r");
+    try {
+      if (stat.size <= CHUNK * 2) {
+        hasher.update(fs.readFileSync(filePath));
+      } else {
+        const head = Buffer.alloc(CHUNK);
+        const tail = Buffer.alloc(CHUNK);
+        fs.readSync(fd, head, 0, CHUNK, 0);
+        fs.readSync(fd, tail, 0, CHUNK, stat.size - CHUNK);
+        hasher.update(head);
+        hasher.update(tail);
+        hasher.update(Buffer.from(`@${stat.size}`));
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    const hash = hasher.digest("hex").slice(0, 16);
+
+    const colors: FileInsights["colors"] = [];
+    const cam: FileInsights["camera"] = {};
+    const decoded = await decodeBufferForInsights(filePath);
+    if (decoded) {
+      const { buf, meta } = decoded;
+      const toHex = (r: number, g: number, b: number) =>
+        `#${[r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
+      // Whole-image dominant swatch — independent try so one failure doesn't
+      // poison the whole palette.
+      try {
+        const d = (await sharp(buf).stats()).dominant;
+        colors.push({ r: d.r, g: d.g, b: d.b, hex: toHex(d.r, d.g, d.b) });
+      } catch { /* best-effort */ }
+      // 3 quadrant swatches.
+      const w = meta.width ?? 100, h = meta.height ?? 100;
+      const quads = [
+        { left: 0, top: 0, width: Math.floor(w / 2), height: Math.floor(h / 2) },
+        { left: Math.ceil(w / 2), top: 0, width: Math.floor(w / 2), height: Math.floor(h / 2) },
+        { left: 0, top: Math.ceil(h / 2), width: Math.floor(w / 2), height: Math.floor(h / 2) },
+      ];
+      const quadResults = await Promise.allSettled(
+        quads.map((q) => withSharpLimit(() => sharp(buf).extract(q).stats())),
+      );
+      for (const r of quadResults) {
+        if (r.status === "fulfilled") {
+          const dd = r.value.dominant;
+          colors.push({ r: dd.r, g: dd.g, b: dd.b, hex: toHex(dd.r, dd.g, dd.b) });
+        }
+      }
+      Object.assign(cam, parseExif(meta.exif));
+    }
+    return { hash, colors, camera: cam };
+  } catch {
+    return null;
+  }
 });
 
 /* ------------------------------------------------------------------ *

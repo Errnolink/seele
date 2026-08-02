@@ -1,4 +1,4 @@
-import { readdirSync, statSync, type Dirent } from "node:fs";
+import { readdirSync, statSync, open as fsOpen, fstat, read, close, type Dirent, type Stats } from "node:fs";
 import path from "node:path";
 import { FILE_TYPE_BY_EXT } from "./extensions";
 import type { MediaFile, MetaPatch, ScanOptions, ScanProgress } from "./types";
@@ -277,42 +277,87 @@ export async function scanFolderStream(
   onProgress?.({ count, currentDir });
 
   // ── Phase 2: stat every file, emit patches in batches ──────────
-  // Runs after enumeration completes. Yields between batches so the
-  // renderer can process metadata patches without blocking.
+  // Runs after enumeration completes. Uses a bounded async pool so that
+  // stat + dimension-probe run concurrently instead of sequentially
+  // (the old loop did 2 synchronous opens per image, one at a time — a
+  // 60k-op serial chain on a 30k-image library). Each file now costs a
+  // SINGLE open(): fstat + read-header + close happen on one fd, so disk
+  // opens are halved and the pool keeps the OS disk cache warm.
   if (onMetaBatch && !signal?.aborted && pendingStat.length > 0) {
     const probe = options.probeDimensions;
-    const STAT_CHUNK = 500;
-    for (let i = 0; i < pendingStat.length; i += STAT_CHUNK) {
-      if (signal?.aborted) break;
-      const chunk = pendingStat.slice(i, i + STAT_CHUNK);
-      const patches: MetaPatch[] = [];
-      for (const f of chunk) {
-        try {
-          const st = statSync(f.filePath);
-          const patch: MetaPatch = {
-            filePath: f.filePath,
-            sizeBytes: st.size,
-            birthtimeMs: st.birthtimeMs,
-            birthtime: st.birthtime.toISOString(),
-            dateKey: dateKeyFromMs(st.birthtimeMs),
-          };
-          if (probe && f.fileType === "image") {
-            const dims = probe(f);
-            if (dims && dims.width > 0 && dims.height > 0) {
-              patch.width = dims.width;
-              patch.height = dims.height;
-            }
+    // Header read size — image-size needs at most ~64KB to identify any
+    // format; smaller keeps the read cheap, larger avoids a rare second
+    // read for exotic headers (TIFF, some RAW). 64KB covers everything.
+    const HEADER_SIZE = 65536;
+    const pool = new Semaphore(Math.max(4, concurrency));
+    const FLUSH_SIZE = 250;
+    const collected: MetaPatch[] = [];
+
+    const flushCollected = (): void => {
+      if (collected.length > 0) {
+        onMetaBatch(collected.splice(0, collected.length));
+      }
+    };
+
+    /** Stat + probe a single file with one fd, return its patch or null. */
+    const statOne = async (f: MediaFile): Promise<MetaPatch | null> => {
+      let fd: number | undefined;
+      try {
+        fd = await new Promise<number>((res, rej) =>
+          fsOpen(f.filePath, "r", (e, fdesc) => (e ? rej(e) : res(fdesc))),
+        );
+        const st = await new Promise<Stats>((res, rej) =>
+          fstat(fd!, (e, s) => (e ? rej(e) : res(s as unknown as Stats))),
+        );
+        const patch: MetaPatch = {
+          filePath: f.filePath,
+          sizeBytes: st.size,
+          birthtimeMs: st.birthtimeMs,
+          birthtime: new Date(st.birthtimeMs).toISOString(),
+          dateKey: dateKeyFromMs(st.birthtimeMs),
+        };
+        // Probe dimensions from the same fd before closing it — one open,
+        // not two.
+        if (probe && f.fileType === "image") {
+          const header = Buffer.allocUnsafe(Math.min(HEADER_SIZE, st.size || HEADER_SIZE));
+          await new Promise<void>((res, rej) =>
+            read(fd!, header, 0, header.length, 0, (e) => (e ? rej(e) : res())),
+          );
+          const dims = probe(header);
+          if (dims && dims.width > 0 && dims.height > 0) {
+            patch.width = dims.width;
+            patch.height = dims.height;
           }
-          patches.push(patch);
-        } catch (e) {
-          // unreadable → skip
-          if (process.env.NODE_ENV !== "production") console.debug("[scan] metaBatch stat failed:", f.filePath, e);
+        }
+        return patch;
+      } catch {
+        return null;
+      } finally {
+        if (fd !== undefined) {
+          await new Promise<void>((res) => close(fd!, () => res()));
         }
       }
-      if (patches.length > 0) onMetaBatch(patches);
-      // Yield so IPC messages drain.
-      await new Promise<void>((r) => setImmediate(r));
-    }
+    };
+
+    // Dispatch the whole list through the pool. Patches are pushed as they
+    // resolve; flush every FLUSH_SIZE so the renderer gets metadata
+    // progressively without waiting for all files to finish.
+    const tasks = pendingStat.map(async (f) => {
+      if (signal?.aborted) return;
+      await pool.acquire();
+      try {
+        const patch = await statOne(f);
+        if (patch) {
+          collected.push(patch);
+          if (collected.length >= FLUSH_SIZE) flushCollected();
+        }
+      } finally {
+        pool.release();
+      }
+    });
+
+    await Promise.all(tasks);
+    flushCollected();
   }
 
   return count;
