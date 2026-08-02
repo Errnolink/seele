@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
 import { MasonryGrid } from "./components/MasonryGrid";
+import { FolderBrowser } from "./components/FolderBrowser";
 import MediaViewer from "./components/MediaViewer";
 import { ContextMenu } from "./components/ContextMenu";
 import CommandPalette from "./components/CommandPalette";
@@ -9,6 +10,8 @@ import { KeyboardHelp } from "./components/KeyboardHelp";
 import AnalyticsModal from "./components/AnalyticsModal";
 import BootSequence from "./components/BootSequence";
 import MoveDialog from "./components/MoveDialog";
+import RenameDialog from "./components/RenameDialog";
+import BatchTagDialog from "./components/BatchTagDialog";
 import TitleBar from "./components/TitleBar";
 import ActivityLog, { type ActivityEntry } from "./components/ActivityLog";
 import SessionChangesModal from "./components/SessionChangesModal";
@@ -331,6 +334,10 @@ export default function App() {
 
   /** State for the in-app move dialog: null = closed, or the file paths to move. */
   const [moveDialogPaths, setMoveDialogPaths] = useState<string[] | null>(null);
+  /** File being renamed (null = dialog closed). */
+  const [renameDialogFile, setRenameDialogFile] = useState<MediaFile | null>(null);
+  /** True when the batch tag dialog is open. */
+  const [showBatchTag, setShowBatchTag] = useState(false);
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const activityIdRef = useRef(0);
 
@@ -571,10 +578,7 @@ export default function App() {
         const f = derivedFilesRef.current.find((df) =>
           selectedIdsRef.current.has(df.filePath),
         );
-        if (f) {
-          const newName = window.prompt("New file name", f.fileName);
-          if (newName && newName !== f.fileName) void handleRenameFile(f, newName);
-        }
+        if (f) setRenameDialogFile(f);
         return;
       }
       // R — reload failed thumbnails (errored tiles re-fetch via cache-buster)
@@ -974,6 +978,14 @@ export default function App() {
                 Open folder...
               </button>
             </div>
+          ) : viewMode === "folders" ? (
+            <FolderBrowser
+              tree={folderTree}
+              currentFolder={selectedFolder}
+              onSelectFolder={setSelectedFolder}
+              files={files}
+              totalBytes={stats.totalSizeBytes}
+            />
           ) : groups.length === 0 || resultCount === 0 ? (
             <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-3">
               <svg
@@ -1136,10 +1148,7 @@ export default function App() {
               key: "rename",
               label: "Rename...",
               onClick: () => {
-                const newName = window.prompt("New file name", contextMenu.file.fileName);
-                if (newName && newName !== contextMenu.file.fileName) {
-                  void handleRenameFile(contextMenu.file, newName);
-                }
+                setRenameDialogFile(contextMenu.file);
                 setContextMenu(null);
               },
             },
@@ -1183,6 +1192,19 @@ export default function App() {
             <span className="text-nerv-amber text-xs">★</span>
             <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-nerv-text group-hover:text-nerv-amber">
               Fav
+            </span>
+          </button>
+          <button
+            type="button"
+            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-cyan/60 hover:bg-nerv-cyan/5 transition-all group"
+            onClick={() => setShowBatchTag(true)}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="text-nerv-cyan">
+              <path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" />
+              <circle cx="7" cy="7" r="1.4" fill="currentColor" />
+            </svg>
+            <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-nerv-text group-hover:text-nerv-cyan">
+              Tag
             </span>
           </button>
 
@@ -1242,10 +1264,7 @@ export default function App() {
             }
           }}
           onMove={handleMoveFile}
-          onRename={(f) => {
-            const newName = window.prompt("New file name", f.fileName);
-            if (newName && newName !== f.fileName) void handleRenameFile(f, newName);
-          }}
+          onRename={(f) => setRenameDialogFile(f)}
           onTrash={handleTrashFile}
         />
       )}
@@ -1256,6 +1275,25 @@ export default function App() {
           count={moveDialogPaths.length}
           onClose={() => setMoveDialogPaths(null)}
           onConfirm={handleMoveConfirm}
+        />
+      )}
+      {renameDialogFile && (
+        <RenameDialog
+          file={renameDialogFile}
+          onClose={() => setRenameDialogFile(null)}
+          onConfirm={(file, newName) => {
+            setRenameDialogFile(null);
+            void handleRenameFile(file, newName);
+          }}
+        />
+      )}
+      {showBatchTag && selectedIds.size > 0 && (
+        <BatchTagDialog
+          tags={tagSystem.tags}
+          filePaths={[...selectedIds]}
+          getFileTags={tagSystem.getFileTags}
+          onBatchToggle={tagSystem.batchAssign}
+          onClose={() => setShowBatchTag(false)}
         />
       )}
 

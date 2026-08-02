@@ -109,6 +109,17 @@ const VIEW_OPTIONS: EvaOption<ViewMode>[] = [
     ),
   },
   {
+    value: "folders",
+    label: "FOLDERS",
+    title: "Folder & subfolder explorer",
+    icon: (
+      <Glyph>
+        <path d="M3 7a2 2 0 0 1 2-2h3l2 2h4a2 2 0 0 1 2 2v1" />
+        <rect x="3" y="9" width="18" height="12" />
+      </Glyph>
+    ),
+  },
+  {
     value: "split",
     label: "SPLIT",
     title: "Split view",
@@ -460,8 +471,8 @@ export function Header(props: HeaderProps) {
 
         <span className="eva-divider" />
 
-        {/* SIZE readout — hidden in list mode */}
-        {viewMode !== "list" && (
+        {/* SIZE readout — hidden in list/folders modes */}
+        {viewMode !== "list" && viewMode !== "folders" && (
           <div className="eva-frame">
             <div className="eva-inner h-7 px-2.5 flex items-center gap-2 bg-[#0a0908]">
               <span className="text-[9px] font-bold tracking-[0.25em] phosphor-dim">

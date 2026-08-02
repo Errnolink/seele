@@ -8,7 +8,7 @@
 import type { MediaFile } from "../scanner/types";
 
 /** Grid layout mode (§7.3). */
-export type ViewMode = "masonry" | "grid" | "list" | "split";
+export type ViewMode = "masonry" | "grid" | "list" | "folders" | "split";
 
 /**
  * Grouping mode. "default"/"none" preserve scan order; the others
