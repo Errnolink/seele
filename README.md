@@ -28,8 +28,3 @@ npm run dev        # vite (HMR) + tsc --watch + electron
 | `npm run build` | Build electron main + renderer into `dist-electron/` and `dist/` |
 
 Media is served to the renderer through a custom `media://` protocol with server-side resize (`?w=`) so the UI never decodes full-resolution images on the main thread.
-
-## Branches
-
-- `main` — stable baseline
-- `v2.5.x` — feature branches per milestone (e.g. `v2.5.2` adds the staged trash queue, viewer keyboard shortcuts, and unified inspector panels)
