@@ -557,7 +557,7 @@ const TagSection = memo(function TagSection({
                 <button
                   type="button"
                   onClick={() => onToggleActiveTag?.(tag.key)}
-                  className="flex-1 flex items-center gap-2 h-7 px-2 text-[10px] font-bold tracking-wider transition-all"
+                  className="flex-1 flex items-center gap-2 h-7 px-2 text-[10px] font-bold tracking-wider transition-[color,background-color,box-shadow]"
                   style={{
                     color: active ? tag.color : "#6a6a65",
                     backgroundColor: active ? tag.bg : "transparent",
@@ -753,7 +753,7 @@ function SidebarInner({
 
   return (
     <aside
-      className={`shrink-0 h-full transition-all duration-300 overflow-hidden ${
+      className={`shrink-0 h-full transition-[width] duration-300 overflow-hidden ${
         open ? "w-64" : "w-0"
       } border-r border-nerv-border/60 bg-nerv-panel`}
       aria-label="Sidebar"

@@ -88,7 +88,7 @@ const FilmstripThumb: React.FC<FilmstripThumbProps> = memo(
         type="button"
         onClick={onClick}
         className={[
-          "relative h-14 w-14 flex-shrink-0 overflow-hidden border transition-all duration-150",
+          "relative h-14 w-14 flex-shrink-0 overflow-hidden border transition-[border-color,box-shadow,opacity] duration-150",
           active
             ? "border-nerv-orange shadow-[0_0_8px_rgba(255,152,48,0.4)] ring-1 ring-nerv-orange/40"
             : "border-nerv-border opacity-60 hover:opacity-100 hover:border-nerv-amber",
@@ -464,7 +464,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
               <button
                 type="button"
                 onClick={() => onMove(file)}
-                className="border border-nerv-lime/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-lime transition-all hover:bg-nerv-lime/10 hover:border-nerv-lime/80"
+                className="border border-nerv-lime/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-lime transition-colors hover:bg-nerv-lime/10 hover:border-nerv-lime/80"
               >
                 ⇥ Move
               </button>
@@ -473,7 +473,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
               <button
                 type="button"
                 onClick={() => onRename(file)}
-                className="border border-nerv-cyan/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-cyan transition-all hover:bg-nerv-cyan/10 hover:border-nerv-cyan/80"
+                className="border border-nerv-cyan/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-cyan transition-colors hover:bg-nerv-cyan/10 hover:border-nerv-cyan/80"
               >
                 ✎ Rename
               </button>
@@ -485,7 +485,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                   onTrash(file);
                   onClose();
                 }}
-                className="border border-nerv-red/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-red transition-all hover:bg-nerv-red/10 hover:border-nerv-red/80"
+                className="border border-nerv-red/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-red transition-colors hover:bg-nerv-red/10 hover:border-nerv-red/80"
               >
                 ⌫ Trash
               </button>
@@ -495,7 +495,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             <button
               type="button"
               onClick={onClose}
-              className="border border-nerv-amber/50 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-amber transition-all hover:bg-nerv-amber/10 hover:shadow-[0_0_8px_rgba(255,183,0,0.2)]"
+              className="border border-nerv-amber/50 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-amber transition-[background-color,box-shadow] hover:bg-nerv-amber/10 hover:shadow-[0_0_8px_rgba(255,183,0,0.2)]"
             >
               ✕ Close
             </button>
@@ -515,7 +515,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             <button
               type="button"
               onClick={() => navigate("prev")}
-              className={`absolute left-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-all duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,152,48,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
+              className={`absolute left-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-[opacity,border-color,box-shadow] duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,152,48,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
               title="Previous (←)"
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -588,7 +588,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             <button
               type="button"
               onClick={() => navigate("next")}
-              className={`absolute right-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-all duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,152,48,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
+              className={`absolute right-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-[opacity,border-color,box-shadow] duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,152,48,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
               title="Next (→)"
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>

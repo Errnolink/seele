@@ -337,6 +337,11 @@ textarea,
 
 /* =========================================================================
  *  Loading shimmer skeleton (§4) — media card placeholder.
+ *
+ *  Default: gradient sweep. Under reduced motion (OS-level or the in-app
+ *  Reduce Motion setting) it switches to a pure opacity pulse — opacity
+ *  is GPU-composited, while animating background-position forces a
+ *  repaint on every loading tile (issues.md item 2).
  * ========================================================================= */
 .shimmer {
   background: linear-gradient(
@@ -347,6 +352,48 @@ textarea,
   );
   background-size: 200% 100%;
   animation: shimmer-sweep 2s infinite;
+}
+
+/* =========================================================================
+ *  Performance / accessibility settings (issues.md items 3, 4, 6).
+ *
+ *  The App root div carries `seele-reduce-motion` / `seele-no-blur`
+ *  classes derived from the Settings page; the OS-level variant applies
+ *  automatically via prefers-reduced-motion.
+ * ========================================================================= */
+
+/* Reduce Motion: kill the always-on decorative animations (full-viewport
+   scanline + glow/pulse) and switch the shimmer to the opacity pulse. */
+.seele-reduce-motion .crt-overlay,
+.seele-reduce-motion [class*="animate-"] {
+  animation: none !important;
+}
+.seele-reduce-motion .shimmer {
+  background: rgba(30, 34, 53, 0.55);
+  background-size: auto;
+  animation: shimmer-pulse 1.4s ease-in-out infinite;
+}
+
+/* OS-level reduced-motion preference — respected by default on first
+   launch via the settings initializer, and as a hard fallback. */
+@media (prefers-reduced-motion: reduce) {
+  .crt-overlay,
+  [class*="animate-"] {
+    animation: none !important;
+  }
+  .shimmer {
+    background: rgba(30, 34, 53, 0.55);
+    background-size: auto;
+    animation: shimmer-pulse 1.4s ease-in-out infinite;
+  }
+}
+
+/* Dialog Blur off: full-viewport backdrop-filter is one of the most
+   GPU-expensive things CSS can do, and every modal uses it (issues.md
+   item 4). The dark overlay alone remains. */
+.seele-no-blur * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* =========================================================================

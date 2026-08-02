@@ -203,7 +203,7 @@ export const FolderBrowser = memo(function FolderBrowser({
               const parent = findParent(tree, viewingNode);
               onSelectFolder(parent && parent !== tree ? parent.path : null);
             }}
-            className="shrink-0 flex items-center gap-1 border border-nerv-border bg-nerv-panel px-3 py-1.5 font-mono text-[9px] font-bold text-nerv-text-dim hover:text-nerv-text hover:border-nerv-orange transition-all"
+            className="shrink-0 flex items-center gap-1 border border-nerv-border bg-nerv-panel px-3 py-1.5 font-mono text-[9px] font-bold text-nerv-text-dim hover:text-nerv-text hover:border-nerv-orange transition-colors"
           >
             <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M10 4l-4 4 4 4" />
@@ -312,7 +312,7 @@ const SubfolderCard = memo(function SubfolderCard({
         if (onFolderContextMenu) onFolderContextMenu(folder.path, e.clientX, e.clientY);
         else onToggleHideFolder(folder.path);
       }}
-      className={`group relative flex flex-col border bg-nerv-panel transition-all overflow-hidden ${
+      className={`group relative flex flex-col border bg-nerv-panel transition-[border-color,box-shadow,opacity,filter] overflow-hidden ${
         isHidden
           ? "border-nerv-border/30 opacity-40 grayscale"
           : "border-nerv-border hover:border-nerv-orange/70 hover:shadow-[0_0_24px_rgba(255,152,48,0.25)]"
@@ -370,7 +370,7 @@ const SubfolderCard = memo(function SubfolderCard({
       {/* ── Relative capacity bar ── */}
       <div className="h-2 w-full bg-black border-b border-nerv-border relative overflow-hidden">
         <div
-          className="h-full bg-gradient-to-r from-nerv-orange via-nerv-cyan to-nerv-green transition-all duration-500"
+          className="h-full bg-gradient-to-r from-nerv-orange via-nerv-cyan to-nerv-green transition-[width] duration-500"
           style={{ width: `${Math.max(4, relativePercent)}%` }}
         />
       </div>
@@ -432,7 +432,7 @@ const SubfolderCard = memo(function SubfolderCard({
           <button
             type="button"
             onClick={() => onSelect(folder.path)}
-            className="flex items-center gap-1 bg-nerv-orange px-2.5 py-1 text-[8.5px] font-bold text-black uppercase tracking-wider shadow-[0_0_8px_rgba(255,152,48,0.3)] hover:brightness-110 cursor-pointer transition-all"
+            className="flex items-center gap-1 bg-nerv-orange px-2.5 py-1 text-[8.5px] font-bold text-black uppercase tracking-wider shadow-[0_0_8px_rgba(255,152,48,0.3)] hover:brightness-110 cursor-pointer transition-[filter]"
           >
             <span>EXPLORE</span>
             <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">

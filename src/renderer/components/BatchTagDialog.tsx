@@ -158,7 +158,7 @@ export function BatchTagDialog({
           <button
             type="button"
             onClick={onClose}
-            className="bg-nerv-lime px-4 py-1.5 text-[10px] font-bold text-black uppercase tracking-wider shadow-[0_0_12px_rgba(201,233,138,0.4)] hover:brightness-110 cursor-pointer transition-all"
+            className="bg-nerv-lime px-4 py-1.5 text-[10px] font-bold text-black uppercase tracking-wider shadow-[0_0_12px_rgba(201,233,138,0.4)] hover:brightness-110 cursor-pointer transition-[filter]"
           >
             DONE
           </button>

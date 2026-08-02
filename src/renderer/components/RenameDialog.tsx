@@ -131,7 +131,7 @@ export function RenameDialog({ file, onClose, onConfirm }: RenameDialogProps) {
             type="button"
             onClick={submit}
             disabled={disabled}
-            className="flex items-center gap-1.5 bg-nerv-amber px-4 py-1.5 text-[10px] font-bold text-black uppercase tracking-wider shadow-[0_0_12px_rgba(255,183,0,0.4)] disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 cursor-pointer transition-all"
+            className="flex items-center gap-1.5 bg-nerv-amber px-4 py-1.5 text-[10px] font-bold text-black uppercase tracking-wider shadow-[0_0_12px_rgba(255,183,0,0.4)] disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 cursor-pointer transition-[filter]"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
               <path d="M20 6 9 17l-5-5" />

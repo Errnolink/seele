@@ -15,6 +15,9 @@ import BatchTagDialog from "./components/BatchTagDialog";
 import TitleBar from "./components/TitleBar";
 import ActivityLog, { type ActivityEntry } from "./components/ActivityLog";
 import SessionChangesModal from "./components/SessionChangesModal";
+import SettingsModal from "./components/SettingsModal";
+import { DEFAULT_SETTINGS } from "./settingsDefaults";
+import type { AppSettings } from "../../electron/settings";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { formatBytes } from "./utils";
 import { useScanState } from "./hooks/useScanState";
@@ -133,6 +136,34 @@ export default function App() {
   // ---- tag classification system (v2.5) ----
   const tagSystem = useTags();
 
+  // ---- settings (performance knobs — issues.md item 6) ----
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [showSettings, setShowSettings] = useState(false);
+  // Load persisted settings on mount. On a true first launch (no file on
+  // disk), adopt the OS-level reduced-motion preference as the default
+  // and persist it so it survives restarts.
+  useEffect(() => {
+    void window.scanAPI.getSettings().then((res) => {
+      if (
+        !res.exists &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ) {
+        setSettings({ ...res.settings, reduceMotion: true });
+        void window.scanAPI.setSettings({ reduceMotion: true });
+      } else {
+        setSettings(res.settings);
+      }
+    }).catch(() => {
+      /* defaults already in state — best-effort */
+    });
+  }, []);
+  const updateSettings = useCallback((patch: Partial<AppSettings>) => {
+    setSettings((prev) => ({ ...prev, ...patch }));
+    void window.scanAPI.setSettings(patch).catch(() => {
+      /* main also clamps — best-effort */
+    });
+  }, []);
+
   // ---- core state ----
   const [booted, setBooted] = useState(false);
   const [folder, setFolder] = useState<string | null>(
@@ -201,6 +232,10 @@ export default function App() {
   const showPaletteRef = useRef(showPalette);
   const showHelpRef = useRef(showHelp);
   const showAnalyticsRef = useRef(showAnalytics);
+  const showSettingsRef = useRef(showSettings);
+  useEffect(() => {
+    showSettingsRef.current = showSettings;
+  }, [showSettings]);
   useEffect(() => {
     folderRef.current = folder;
   }, [folder]);
@@ -572,6 +607,10 @@ export default function App() {
           setShowAnalytics(false);
           return;
         }
+        if (showSettingsRef.current) {
+          setShowSettings(false);
+          return;
+        }
         if (viewerIndexRef.current !== null) return; // viewer handles its own Esc
         if (contextMenuRef.current) {
           setContextMenu(null);
@@ -813,7 +852,9 @@ export default function App() {
 
   return (
     <div
-      className="h-screen w-screen flex flex-col bg-nerv-bg text-nerv-text overflow-hidden relative font-mono select-none"
+      className={`h-screen w-screen flex flex-col bg-nerv-bg text-nerv-text overflow-hidden relative font-mono select-none ${
+        settings.reduceMotion ? "seele-reduce-motion" : ""
+      } ${settings.dialogBlur ? "" : "seele-no-blur"}`}
       onDragEnter={(e) => {
         if (e.dataTransfer?.types?.includes("Files")) {
           e.preventDefault();
@@ -897,6 +938,7 @@ export default function App() {
         onOpenHelp={() => setShowHelp(true)}
         onOpenPalette={() => setShowPalette(true)}
         onOpenAnalytics={() => setShowAnalytics(true)}
+        onOpenSettings={() => setShowSettings(true)}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((s) => !s)}
       />
@@ -1028,7 +1070,7 @@ export default function App() {
               </div>
               <button
                 type="button"
-                className="mt-2 px-5 py-2 bg-nerv-orange hover:bg-nerv-amber text-nerv-bg font-mono font-bold text-xs uppercase transition-all duration-150 cursor-pointer shadow-[0_0_12px_rgba(255,152,48,0.3)]"
+                className="mt-2 px-5 py-2 bg-nerv-orange hover:bg-nerv-amber text-nerv-bg font-mono font-bold text-xs uppercase transition-colors duration-150 cursor-pointer shadow-[0_0_12px_rgba(255,152,48,0.3)]"
                 onClick={pickFolder}
               >
                 Open folder...
@@ -1089,6 +1131,7 @@ export default function App() {
               onCloseInspector={() => setActiveInspectFile(null)}
               activeInspectFile={activeInspectFile}
               reloadEpoch={reloadEpoch}
+              overscan={settings.overscan}
               tags={tagSystem.tags}
               fileTagGetter={tagSystem.getFileTags}
               onToggleFileTag={tagSystem.toggleFileTag}
@@ -1316,7 +1359,7 @@ export default function App() {
           {/* Actions */}
           <button
             type="button"
-            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-amber/60 hover:bg-nerv-amber/5 transition-all group"
+            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-amber/60 hover:bg-nerv-amber/5 transition-colors group"
             onClick={() => {
               // Single state update for the whole selection — the previous
               // per-file toggleFavorite loop fired N setState calls, each
@@ -1341,7 +1384,7 @@ export default function App() {
           </button>
           <button
             type="button"
-            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-cyan/60 hover:bg-nerv-cyan/5 transition-all group"
+            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-cyan/60 hover:bg-nerv-cyan/5 transition-colors group"
             onClick={() => setShowBatchTag(true)}
           >
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="text-nerv-cyan">
@@ -1355,7 +1398,7 @@ export default function App() {
 
           <button
             type="button"
-            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-lime/60 hover:bg-nerv-lime/5 transition-all group"
+            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-lime/60 hover:bg-nerv-lime/5 transition-colors group"
             onClick={() => void handleMoveSelected()}
           >
             <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="text-nerv-lime">
@@ -1368,7 +1411,7 @@ export default function App() {
 
           <button
             type="button"
-            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-red/60 hover:bg-nerv-red/5 transition-all group"
+            className="eva-ticket px-3 flex items-center gap-1.5 bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-red/60 hover:bg-nerv-red/5 transition-colors group"
             onClick={() => void handleTrashSelected()}
           >
             <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="text-nerv-red">
@@ -1381,7 +1424,7 @@ export default function App() {
 
           <button
             type="button"
-            className="eva-ticket px-3 flex items-center bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-muted hover:bg-nerv-panel-2 transition-all group"
+            className="eva-ticket px-3 flex items-center bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-muted hover:bg-nerv-panel-2 transition-colors group"
             onClick={clearSelection}
           >
             <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-nerv-muted group-hover:text-nerv-text">
@@ -1452,7 +1495,7 @@ export default function App() {
         <button
           type="button"
           onClick={() => setShowSessionLog(true)}
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-4 py-1.5 bg-nerv-panel border border-nerv-orange/40 text-nerv-orange text-[10px] font-mono font-bold tracking-wider hover:bg-nerv-orange/10 hover:shadow-[0_0_12px_rgba(255,152,48,0.3)] transition-all"
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-4 py-1.5 bg-nerv-panel border border-nerv-orange/40 text-nerv-orange text-[10px] font-mono font-bold tracking-wider hover:bg-nerv-orange/10 hover:shadow-[0_0_12px_rgba(255,152,48,0.3)] transition-[background-color,color,box-shadow]"
         >
           <span className="w-1.5 h-1.5 bg-nerv-orange animate-pulse-soft" />
           SESSION LOG
@@ -1495,6 +1538,15 @@ export default function App() {
             setActivityLog([]);
             setShowSessionLog(false);
           }}
+        />
+      )}
+
+      {/* Settings — performance & accessibility knobs (issues.md item 6) */}
+      {showSettings && (
+        <SettingsModal
+          settings={settings}
+          onChange={updateSettings}
+          onClose={() => setShowSettings(false)}
         />
       )}
     </div>

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { MediaFile, MetaPatch, ScanProgress } from "../src/scanner/types";
+import type { AppSettings } from "./settings";
 /** Tracks the previous scan's listener cleanup so a new scan removes them (v4 H-1). */
 let activeScanCleanup: (() => void) | null = null;
 
@@ -103,6 +104,12 @@ export interface ScanAPI {
   winMinimize(): void;
   winMaximize(): void;
   winClose(): void;
+
+  // ── Settings (performance knobs — issues.md item 6) ──
+  /** Read the persisted settings. `exists: false` on first launch. */
+  getSettings(): Promise<{ settings: AppSettings; exists: boolean }>;
+  /** Persist a partial patch; resolves with the merged settings. */
+  setSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
 }
 
 const api: ScanAPI = {
@@ -187,6 +194,10 @@ const api: ScanAPI = {
   winMinimize: () => ipcRenderer.send("win:minimize"),
   winMaximize: () => ipcRenderer.send("win:maximize"),
   winClose: () => ipcRenderer.send("win:close"),
+
+  // Settings (performance knobs).
+  getSettings: () => ipcRenderer.invoke("settings:get"),
+  setSettings: (patch) => ipcRenderer.invoke("settings:set", patch),
 };
 
 contextBridge.exposeInMainWorld("scanAPI", api);

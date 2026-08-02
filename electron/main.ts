@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import * as mediaCache from "./mediaCache";
+import * as settingsStore from "./settings";
 import type { MediaFile, MetaPatch, ScanProgress } from "../src/scanner/types";
 import { FILE_TYPE_BY_EXT } from "../src/scanner/extensions";
 
@@ -306,7 +307,9 @@ async function lookupThumb(cacheKey: string): Promise<Uint8Array | null> {
  * bounding resource use. */
 const sharpQueue: (() => void)[] = [];
 let sharpActive = 0;
-const SHARP_CONCURRENCY = 4;
+/** Concurrent sharp decodes — fed by the settings decodeConcurrency knob
+ *  (default 4), not a hardcoded constant (issues.md item 5). */
+let sharpConcurrency = 4;
 function withSharpLimit<T>(fn: () => Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const run = () => {
@@ -319,7 +322,7 @@ function withSharpLimit<T>(fn: () => Promise<T>): Promise<T> {
           if (next) next();
         });
     };
-    if (sharpActive < SHARP_CONCURRENCY) run();
+    if (sharpActive < sharpConcurrency) run();
     else sharpQueue.push(run);
   });
 }
@@ -333,7 +336,9 @@ function withSharpLimit<T>(fn: () => Promise<T>): Promise<T> {
  * videos would swamp CPU. 2 keeps first-paint latency low. */
 const ffmpegQueue: (() => void)[] = [];
 let ffmpegActive = 0;
-const FFMPEG_CONCURRENCY = 2;
+/** Concurrency limit for ffmpeg frame extraction — half the settings
+ *  decodeConcurrency value (default 2), matching the old constant. */
+let ffmpegConcurrency = 2;
 function withFfmpegLimit<T>(fn: () => Promise<T>): Promise<T> {
   const { promise, resolve, reject } = Promise.withResolvers<T>();
   const run = () => {
@@ -344,9 +349,16 @@ function withFfmpegLimit<T>(fn: () => Promise<T>): Promise<T> {
       if (next) next();
     });
   };
-  if (ffmpegActive < FFMPEG_CONCURRENCY) run();
+  if (ffmpegActive < ffmpegConcurrency) run();
   else ffmpegQueue.push(run);
   return promise;
+}
+
+/** Sync the sharp/ffmpeg semaphore sizes with the persisted settings.
+ *  Called at startup and on every settings change (issues.md item 5). */
+function applyConcurrencySettings(settings: settingsStore.AppSettings): void {
+  sharpConcurrency = Math.max(1, Math.min(6, settings.decodeConcurrency));
+  ffmpegConcurrency = Math.max(1, Math.round(sharpConcurrency / 2));
 }
 /** Locate ffmpeg on the system PATH. Cached after first lookup.
  *  `where` is Windows-only; macOS/Linux use `which`. */
@@ -520,6 +532,9 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  // Size the decode semaphores from the persisted settings before the
+  // first thumbnail request arrives (issues.md item 5).
+  applyConcurrencySettings(settingsStore.getSettings());
   // Bring the disk tier back under budget at startup — the cheapest moment
   // to pay the walk cost, and it catches whatever grew since last launch.
   void pruneThumbCache();
@@ -542,9 +557,13 @@ function pathToFileUrl(p: string): string {
 }
 app.on("window-all-closed", () => {
   mediaCache.flush();
+  settingsStore.flush();
   if (process.platform !== "darwin") app.quit();
 });
-app.on("before-quit", () => mediaCache.flush());
+app.on("before-quit", () => {
+  mediaCache.flush();
+  settingsStore.flush();
+});
 
 app.on("activate", () => {
   if (mainWindow === null) createWindow();
@@ -786,6 +805,29 @@ ipcMain.handle("shell:openPath", async (_e, filePath: string) => {
 /** Write text to the system clipboard. */
 ipcMain.handle("clipboard:writeText", (_e, text: string) => {
   if (typeof text === "string") clipboard.writeText(text);
+});
+
+/* ------------------------------------------------------------------ *
+ *  Settings (performance knobs — issues.md item 6).
+ *  `settings:get` returns the persisted settings plus whether the file
+ *  existed (first launch), so the renderer can adopt the OS-level
+ *  prefers-reduced-motion default. `settings:set` persists a partial
+ *  patch and re-sizes the decode semaphores live.
+ * ------------------------------------------------------------------ */
+
+ipcMain.handle("settings:get", () => settingsStore.loadSettings());
+
+ipcMain.handle("settings:set", (_e, patch: unknown) => {
+  if (!patch || typeof patch !== "object") return settingsStore.getSettings();
+  const p = patch as Partial<settingsStore.AppSettings>;
+  const updated = settingsStore.updateSettings({
+    reduceMotion: p.reduceMotion,
+    dialogBlur: p.dialogBlur,
+    decodeConcurrency: p.decodeConcurrency,
+    overscan: p.overscan,
+  });
+  applyConcurrencySettings(updated);
+  return updated;
 });
 
 /** Inspector insights: content hash, dominant colors, and EXIF camera info. */

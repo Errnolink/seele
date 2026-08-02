@@ -48,6 +48,7 @@ export interface HeaderProps {
   onOpenHelp: () => void;
   onOpenPalette: () => void;
   onOpenAnalytics: () => void;
+  onOpenSettings: () => void;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
 }
@@ -181,6 +182,7 @@ export function Header(props: HeaderProps) {
     onOpenHelp,
     onOpenPalette,
     onOpenAnalytics,
+    onOpenSettings,
     sidebarOpen,
     onToggleSidebar,
   } = props;
@@ -247,7 +249,7 @@ export function Header(props: HeaderProps) {
             onClick={onScan}
             disabled={scanning}
             title={scanning ? "Scanning in progress" : "Initiate media scan"}
-            className={`no-drag shrink-0 eva-shear h-8 px-4 flex items-center gap-1.5 text-[11px] font-bold tracking-wider transition-all ${
+            className={`no-drag shrink-0 eva-shear h-8 px-4 flex items-center gap-1.5 text-[11px] font-bold tracking-wider transition-colors ${
               scanning
                 ? "bg-[#33230a] text-[#ffb020] animate-pulse cursor-wait"
                 : "bg-nerv-orange text-black hover:brightness-110"
@@ -317,6 +319,18 @@ export function Header(props: HeaderProps) {
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M4 17l6-6-6-6M12 19h8" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              title="Performance settings"
+              aria-label="Performance settings"
+              className="no-drag text-nerv-text-dim hover:text-nerv-amber h-8 w-8 flex items-center justify-center transition-colors"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
             </button>
             <button

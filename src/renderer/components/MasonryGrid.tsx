@@ -32,8 +32,9 @@ const HEADER_HEIGHT = 32;
 const GAP = 10;
 /** Scroll padding in px. */
 const PADDING = 16;
-/** Overscan band (px above + below the viewport) mounted for smooth scroll. */
-const OVERSCAN = 600;
+/** Overscan band (px above + below the viewport) mounted for smooth scroll.
+ *  Feedable from the Settings page (issues.md item 6). */
+const OVERSCAN_DEFAULT = 600;
 /** Fallback aspect ratio (height/width) for files without dimensions. */
 const FALLBACK_RATIO = 0.75;
 /** Uniform tile height for grid + list virtualization (px). */
@@ -66,6 +67,8 @@ export interface MasonryGridProps {
   activeInspectFile: MediaFile | null;
   /** Incremented to force re-fetch of failed tile thumbnails. */
   reloadEpoch: number;
+  /** Scroll overscan band in px — settings-driven (default 600). */
+  overscan?: number;
   /** Tag system props — v2.5 §Module 6.4 */
   tags?: TagDef[];
   fileTagGetter?: (filePath: string) => TagDef[];
@@ -173,7 +176,7 @@ const MediaCard = memo(function MediaCard({
         e.dataTransfer.setData("text/plain", file.filePath);
       }}
       className={[
-        "group relative border overflow-hidden transition-all duration-200 cursor-pointer bg-nerv-panel select-none",
+        "group relative border overflow-hidden transition-[border-color,box-shadow] duration-200 cursor-pointer bg-nerv-panel select-none",
         mayHaveAlpha && "thumb-checkerboard",
         selected
           ? "border-nerv-orange ring-2 ring-nerv-orange/50 shadow-[0_0_15px_rgba(255,152,48,0.3)]"
@@ -220,7 +223,7 @@ const MediaCard = memo(function MediaCard({
             }}
             onError={() => setError(true)}
             className={[
-              "w-full h-full object-cover transition-all duration-300 group-hover:scale-105",
+              "w-full h-full object-cover transition-transform duration-300 group-hover:scale-105",
               loaded ? "opacity-100" : "opacity-0",
             ].join(" ")}
             draggable={false}
@@ -403,6 +406,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
   onCloseInspector,
   activeInspectFile,
   reloadEpoch,
+  overscan = OVERSCAN_DEFAULT,
   tags,
   fileTagGetter,
   onToggleFileTag,
@@ -646,6 +650,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
       scrollTop={scrollTop}
       viewportHeight={viewportHeight}
       showGroups={showGroups}
+      overscan={overscan}
       selectedIds={selectedIds}
       favorites={favorites}
       onToggleSelect={onToggleSelect}
@@ -662,6 +667,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
       scrollTop={scrollTop}
       viewportHeight={viewportHeight}
       showGroups={showGroups}
+      overscan={overscan}
       selectedIds={selectedIds}
       favorites={favorites}
       onToggleSelect={onToggleSelect}
@@ -680,6 +686,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
       scrollTop={scrollTop}
       viewportHeight={viewportHeight}
       showGroups={showGroups}
+      overscan={overscan}
       selectedIds={selectedIds}
       favorites={favorites}
       onToggleSelect={onToggleSelect}
@@ -745,6 +752,8 @@ interface MasonryViewProps {
   scrollTop: number;
   viewportHeight: number;
   showGroups: boolean;
+  /** Scroll overscan band in px (settings-driven). */
+  overscan: number;
   selectedIds: Set<string>;
   favorites: Set<string>;
   onToggleSelect: (filePath: string, e: React.MouseEvent) => void;
@@ -766,6 +775,7 @@ const MasonryView = memo(function MasonryView({
   viewportHeight,
   onOpen,
   showGroups,
+  overscan,
   selectedIds,
   favorites,
   onToggleSelect,
@@ -776,8 +786,8 @@ const MasonryView = memo(function MasonryView({
   fileTagGetter,
   onDimensions,
 }: MasonryViewProps) {
-  const top = scrollTop - OVERSCAN;
-  const bottom = scrollTop + viewportHeight + OVERSCAN;
+  const top = scrollTop - overscan;
+  const bottom = scrollTop + viewportHeight + overscan;
 
   // Visible headers.
   const visibleHeaders = useMemo(() => {
@@ -879,6 +889,8 @@ interface GridViewProps {
   scrollTop: number;
   viewportHeight: number;
   showGroups: boolean;
+  /** Scroll overscan band in px (settings-driven). */
+  overscan: number;
   selectedIds: Set<string>;
   favorites: Set<string>;
   onToggleSelect: (filePath: string, e: React.MouseEvent) => void;
@@ -898,6 +910,7 @@ const GridView = memo(function GridView({
   scrollTop,
   viewportHeight,
   showGroups,
+  overscan,
   selectedIds,
   favorites,
   onToggleSelect,
@@ -909,8 +922,8 @@ const GridView = memo(function GridView({
   onInspect,
   onDimensions,
 }: GridViewProps) {
-  const top = scrollTop - OVERSCAN;
-  const bottom = scrollTop + viewportHeight + OVERSCAN;
+  const top = scrollTop - overscan;
+  const bottom = scrollTop + viewportHeight + overscan;
 
   // Visible headers + per-section visible row windows.
   const visible = useMemo(() => {
@@ -1028,6 +1041,8 @@ interface ListViewProps {
   scrollTop: number;
   viewportHeight: number;
   showGroups: boolean;
+  /** Scroll overscan band in px (settings-driven). */
+  overscan: number;
   selectedIds: Set<string>;
   favorites: Set<string>;
   onToggleSelect: (filePath: string, e: React.MouseEvent) => void;
@@ -1044,6 +1059,7 @@ const ListView = memo(function ListView({
   scrollTop,
   viewportHeight,
   showGroups,
+  overscan,
   selectedIds,
   favorites,
   onToggleSelect,
@@ -1053,8 +1069,8 @@ const ListView = memo(function ListView({
   onInspect,
   reloadEpoch,
 }: ListViewProps) {
-  const top = scrollTop - OVERSCAN;
-  const bottom = scrollTop + viewportHeight + OVERSCAN;
+  const top = scrollTop - overscan;
+  const bottom = scrollTop + viewportHeight + overscan;
 
   const visible = useMemo(() => {
     const headers: Array<{ label: string; count: number; y: number }> = [];
@@ -1286,7 +1302,7 @@ function InspectorTagManager({
                 key={tag.key}
                 type="button"
                 onClick={() => onToggleFileTag(filePath, tag.key)}
-                className="tag-chip px-1.5 py-0.5 text-[8px] font-mono font-bold tracking-wider transition-all"
+                className="tag-chip px-1.5 py-0.5 text-[8px] font-mono font-bold tracking-wider transition-colors"
                 style={{
                   color: assigned ? tag.color : "#6a6a65",
                   backgroundColor: assigned ? tag.bg : "transparent",
