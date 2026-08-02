@@ -4,4 +4,5 @@ dist-electron/
 *.tsbuildinfo
 .vite/
 .DS_Store
-/AGENT_MEMORY.md
+# Agent memory + issue docs — local only
+agents-reference/
