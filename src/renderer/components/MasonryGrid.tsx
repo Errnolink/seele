@@ -23,6 +23,7 @@ import React, {
 } from "react";
 import type { GroupMode, MediaFile, ViewMode } from "../types";
 import { formatBytes, formatDate } from "../utils";
+import type { TagDef } from "../hooks/useTags";
 
 // ── Layout constants ─────────────────────────────────────────────────
 /** Header bar height (group label row) in px. */
@@ -61,6 +62,10 @@ export interface MasonryGridProps {
   activeInspectFile: MediaFile | null;
   /** Incremented to force re-fetch of failed tile thumbnails. */
   reloadEpoch: number;
+  /** Tag system props — v2.5 §Module 6.4 */
+  tags?: TagDef[];
+  fileTagGetter?: (filePath: string) => TagDef[];
+  onToggleFileTag?: (filePath: string, tagKey: string) => void;
 }
 
 /** Build a media URL for a tile, requesting a sharp thumbnail for images. */
@@ -367,6 +372,9 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
   onInspect,
   activeInspectFile,
   reloadEpoch,
+  tags,
+  fileTagGetter,
+  onToggleFileTag,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -613,6 +621,9 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
           activeInspectFile={activeInspectFile}
           onOpenInspect={onOpen}
           reloadEpoch={reloadEpoch}
+          tags={tags}
+          fileTagGetter={fileTagGetter}
+          onToggleFileTag={onToggleFileTag}
         />
       )}
     </div>
@@ -640,6 +651,10 @@ interface MasonryViewProps {
   activeInspectFile: MediaFile | null;
   onOpenInspect: (file: MediaFile) => void;
   reloadEpoch: number;
+  /** Tag system props — v2.5 */
+  tags?: TagDef[];
+  fileTagGetter?: (filePath: string) => TagDef[];
+  onToggleFileTag?: (filePath: string, tagKey: string) => void;
 }
 
 const MasonryView = memo(function MasonryView({
@@ -659,6 +674,9 @@ const MasonryView = memo(function MasonryView({
   activeInspectFile,
   onOpenInspect,
   reloadEpoch,
+  tags,
+  fileTagGetter,
+  onToggleFileTag,
 }: MasonryViewProps) {
   const top = scrollTop - OVERSCAN;
   const bottom = scrollTop + viewportHeight + OVERSCAN;
@@ -690,7 +708,7 @@ const MasonryView = memo(function MasonryView({
   }, [sections, top, bottom]);
 
   const inspector = split ? (
-    <InspectorCard file={activeInspectFile} onOpen={onOpenInspect} />
+    <InspectorCard file={activeInspectFile} onOpen={onOpenInspect} tags={tags} fileTags={activeInspectFile && fileTagGetter ? fileTagGetter(activeInspectFile.filePath) : undefined} onToggleFileTag={onToggleFileTag} />
   ) : null;
 
   return (
@@ -1082,13 +1100,96 @@ const ListView = memo(function ListView({
 });
 
 // ── Split inspector card ────────────────────────────────────────────
+/** Inline tag manager for the Inspector dock — shows assigned tags as pills
+ *  and an expandable grid to toggle all available tags (v2.5 §Module 6.4). */
+function InspectorTagManager({
+  tags,
+  fileTags,
+  filePath,
+  onToggleFileTag,
+}: {
+  tags: TagDef[];
+  fileTags: TagDef[];
+  filePath: string;
+  onToggleFileTag: (filePath: string, tagKey: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const assignedKeys = useMemo(() => new Set(fileTags.map((t) => t.key)), [fileTags]);
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[9px] font-bold tracking-[0.2em] text-nerv-muted uppercase">
+          Tags
+        </span>
+        <button
+          type="button"
+          onClick={() => setEditing((e) => !e)}
+          className="text-[8px] font-mono tracking-wider text-nerv-orange/80 hover:text-nerv-orange border border-nerv-orange/30 px-1.5 py-0.5 hover:bg-nerv-orange/10"
+        >
+          {editing ? "DONE" : "EDIT TAGS"}
+        </button>
+      </div>
+
+      {/* Assigned tag pills */}
+      {fileTags.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {fileTags.map((tag) => (
+            <span
+              key={tag.key}
+              className="tag-chip px-1.5 py-0.5 text-[9px] font-mono font-bold tracking-wider"
+              style={{
+                color: tag.color,
+                backgroundColor: tag.bg,
+                border: `1px solid ${tag.border}`,
+              }}
+            >
+              {tag.label}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <span className="text-[9px] font-mono text-nerv-muted">No tags assigned</span>
+      )}
+
+      {/* Editable tag grid */}
+      {editing && (
+        <div className="flex flex-wrap gap-1 mt-1 p-2 bg-nerv-bg border border-nerv-border">
+          {tags.map((tag) => {
+            const assigned = assignedKeys.has(tag.key);
+            return (
+              <button
+                key={tag.key}
+                type="button"
+                onClick={() => onToggleFileTag(filePath, tag.key)}
+                className="tag-chip px-1.5 py-0.5 text-[8px] font-mono font-bold tracking-wider transition-all"
+                style={{
+                  color: assigned ? tag.color : "#6a6a65",
+                  backgroundColor: assigned ? tag.bg : "transparent",
+                  border: `1px solid ${assigned ? tag.border : "#2e2e34"}`,
+                }}
+              >
+                {tag.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 interface InspectorCardProps {
   file: MediaFile | null;
   onOpen: (file: MediaFile) => void;
+  /** Tag system props — v2.5 §Module 6.4 */
+  tags?: TagDef[];
+  fileTags?: TagDef[];
+  onToggleFileTag?: (filePath: string, tagKey: string) => void;
 }
 
-const InspectorCard = memo(function InspectorCard({ file, onOpen }: InspectorCardProps) {
+const InspectorCard = memo(function InspectorCard({ file, onOpen, tags, fileTags, onToggleFileTag }: InspectorCardProps) {
   return (
     <div className="w-80 shrink-0 border border-nerv-border bg-nerv-panel p-4 flex flex-col gap-4 font-mono text-xs h-fit sticky top-0 eva-corner">
       <div className="flex items-center justify-between">
@@ -1133,6 +1234,15 @@ const InspectorCard = memo(function InspectorCard({ file, onOpen }: InspectorCar
               {file.filePath}
             </span>
           </div>
+          {/* Interactive Tag Manager — v2.5 §Module 6.4 */}
+          {tags && onToggleFileTag && (
+            <InspectorTagManager
+              tags={tags}
+              fileTags={fileTags ?? []}
+              filePath={file.filePath}
+              onToggleFileTag={onToggleFileTag}
+            />
+          )}
           <div className="grid grid-cols-2 gap-2">
             <Stat label="Dimensions" value={file.width > 0 && file.height > 0 ? `${file.width}x${file.height}` : "\u2014"} />
             <Stat

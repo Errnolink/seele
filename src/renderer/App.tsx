@@ -14,6 +14,7 @@ import ActivityLog, { type ActivityEntry } from "./components/ActivityLog";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { formatBytes } from "./utils";
 import { useScanState } from "./hooks/useScanState";
+import { useTags } from "./hooks/useTags";
 import type {
   FolderNode,
   GroupMode,
@@ -124,6 +125,9 @@ export default function App() {
     onMetaBatch,
     onRemoveFiles,
   } = useScanState();
+
+  // ---- tag classification system (v2.5) ----
+  const tagSystem = useTags();
 
   // ---- core state ----
   const [booted, setBooted] = useState(false);
@@ -617,11 +621,20 @@ export default function App() {
       searchFiltered = typeFiltered.filter((f) => f.fileNameLower.includes(q));
     }
 
-    const filteredCount = searchFiltered.length;
+    // 3.5. Tag filter (v2.5) — only files that have at least one active tag.
+    let tagFiltered = searchFiltered;
+    if (tagSystem.activeTags.size > 0) {
+      tagFiltered = searchFiltered.filter((f) => {
+        const assigned = tagSystem.getFileTags(f.filePath);
+        return assigned.some((t) => tagSystem.activeTags.has(t.key));
+      });
+    }
+
+    const filteredCount = tagFiltered.length;
 
     // 4. Sort (§10.2 iv). date is default.
     const sign = sortDir === "asc" ? 1 : -1;
-    const ordered = [...searchFiltered].sort((a, b) => {
+    const ordered = [...tagFiltered].sort((a, b) => {
       if (sortMode === "name") {
         return a.fileNameLower < b.fileNameLower
           ? -sign
@@ -688,7 +701,7 @@ export default function App() {
       groups: outGroups,
       resultCount: filteredCount,
     };
-  }, [files, selectedFolder, typeFilter, typeFilter === "favorite" ? favorites : null, debouncedQuery, groupMode, sortMode, sortDir]);
+  }, [files, selectedFolder, typeFilter, typeFilter === "favorite" ? favorites : null, debouncedQuery, groupMode, sortMode, sortDir, tagSystem.activeTags, tagSystem.filterByTags]);
 
   // Keep a live ref of derivedFiles for the viewer navigation handler.
   // (derivedFilesRef itself is declared alongside the handlers above.)
@@ -912,6 +925,12 @@ export default function App() {
           stats={stats}
           onDropFiles={handleMoveToDir}
           selectedIds={selectedIds}
+          tags={tagSystem.tags}
+          activeTags={tagSystem.activeTags}
+          tagCounts={tagSystem.tagCounts}
+          onAddTag={tagSystem.addTag}
+          onRemoveTag={tagSystem.removeTag}
+          onToggleActiveTag={tagSystem.toggleActiveTag}
         />
 
         {/* Main content */}
@@ -991,6 +1010,9 @@ export default function App() {
               }}
               activeInspectFile={activeInspectFile}
               reloadEpoch={reloadEpoch}
+              tags={tagSystem.tags}
+              fileTagGetter={tagSystem.getFileTags}
+              onToggleFileTag={tagSystem.toggleFileTag}
             />
           )}
         </main>

@@ -11,6 +11,7 @@
  */
 import { memo, useDeferredValue, useMemo, useState, type ReactNode } from "react";
 import type { FolderNode, MediaTypeFilter, ScanStats } from "../types";
+import type { TagDef } from "../hooks/useTags";
 import { formatBytes, pad } from "../utils";
 
 export interface SidebarProps {
@@ -26,6 +27,13 @@ export interface SidebarProps {
   onDropFiles?: (filePaths: string[], destDir: string) => void;
   /** Currently selected file IDs (for the drag source). */
   selectedIds?: Set<string>;
+  /** Tag system — v2.5 §Module 3.3 */
+  tags?: TagDef[];
+  activeTags?: Set<string>;
+  tagCounts?: Map<string, number>;
+  onAddTag?: (label: string, category?: TagDef["category"]) => string;
+  onRemoveTag?: (key: string) => void;
+  onToggleActiveTag?: (key: string) => void;
 }
 
 /** A quick-view filter button definition (§7.2 table). */
@@ -158,6 +166,8 @@ interface FolderTreeNodeProps {
   filter: string;
   onDropFiles?: (filePaths: string[], destDir: string) => void;
   selectedIds?: Set<string>;
+  /** Root tree total size (bytes) for computing capacity percentages. */
+  rootSize?: number;
 }
 
 /** Recursive folder row. The ALL FILES clearFolder action lives above; rows
@@ -172,6 +182,7 @@ const FolderTreeNode = memo(function FolderTreeNode({
   filter,
   onDropFiles,
   selectedIds,
+  rootSize,
 }: FolderTreeNodeProps) {
   const hasChildren = node.children.length > 0;
   const isOpen = expanded.has(node.path);
@@ -257,6 +268,19 @@ const FolderTreeNode = memo(function FolderTreeNode({
         >
           {pad(node.count, 2)}
         </span>
+
+        {/* Capacity bar — shows byte size relative to root (v2.5 §Module 3.2). */}
+        {!isDropTarget && node.size > 0 && rootSize && rootSize > 0 && (
+          <span
+            className="shrink-0 w-12 h-1.5 bg-nerv-border/60 relative overflow-hidden"
+            title={`${formatBytes(node.size)} · ${((node.size / rootSize) * 100).toFixed(1)}%`}
+          >
+            <span
+              className="absolute inset-y-0 left-0 bg-nerv-orange/70"
+              style={{ width: `${Math.max(2, (node.size / rootSize) * 100)}%` }}
+            />
+          </span>
+        )}
       </div>
 
       {hasChildren && isOpen && (
@@ -273,6 +297,7 @@ const FolderTreeNode = memo(function FolderTreeNode({
               filter={filter}
               onDropFiles={onDropFiles}
               selectedIds={selectedIds}
+              rootSize={rootSize}
             />
           ))}
         </div>
@@ -406,6 +431,7 @@ const DirectoryExplorer = memo(function DirectoryExplorer({
             filter={filter}
             onDropFiles={onDropFiles}
             selectedIds={selectedIds}
+            rootSize={visible.tree.size}
           />
         ) : (
           <div className="text-[10px] font-mono text-nerv-muted px-1 py-2">
@@ -414,6 +440,164 @@ const DirectoryExplorer = memo(function DirectoryExplorer({
         )}
       </div>
     </>
+  );
+});
+
+/* --------------------------- Classification Tags --------------------------- */
+
+const TagSection = memo(function TagSection({
+  tags,
+  activeTags,
+  tagCounts,
+  onAddTag,
+  onRemoveTag,
+  onToggleActiveTag,
+}: {
+  tags: TagDef[];
+  activeTags: Set<string>;
+  tagCounts: Map<string, number>;
+  onAddTag?: (label: string, category?: TagDef["category"]) => string;
+  onRemoveTag?: (key: string) => void;
+  onToggleActiveTag?: (key: string) => void;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [newLabel, setNewLabel] = useState("");
+
+  const handleAdd = () => {
+    const label = newLabel.trim();
+    if (label && onAddTag) {
+      onAddTag(label);
+      setNewLabel("");
+      setAdding(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-nerv-purple/25 flex flex-col">
+      {/* Collapsible header */}
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className="flex items-center gap-2 px-3 py-2 hover:bg-nerv-panel-2/50 transition-colors w-full"
+      >
+        <span className="text-[10px] font-mono text-nerv-muted">
+          {collapsed ? "\u25B8" : "\u25BE"}
+        </span>
+        <span className="text-[9px] font-bold tracking-[0.25em] phosphor-lime">
+          TAGS
+        </span>
+        <span className="h-px flex-1 bg-gradient-to-r from-nerv-purple/40 to-transparent" />
+        <span className="text-[9px] font-mono text-nerv-muted tabular-nums">
+          {tags.length}
+        </span>
+      </button>
+
+      {/* Tag pills */}
+      {!collapsed && (
+        <div className="px-3 pb-3 flex flex-col gap-1.5">
+          {tags.map((tag) => {
+            const active = activeTags.has(tag.key);
+            const count = tagCounts.get(tag.key) ?? 0;
+            return (
+              <div key={tag.key} className="group/tag flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onToggleActiveTag?.(tag.key)}
+                  className="flex-1 flex items-center gap-2 h-7 px-2 text-[10px] font-bold tracking-wider transition-all"
+                  style={{
+                    color: active ? tag.color : "#6a6a65",
+                    backgroundColor: active ? tag.bg : "transparent",
+                    borderLeft: `2px solid ${tag.border}`,
+                    borderTop: "1px solid rgba(31,31,35,0.8)",
+                    borderRight: "1px solid rgba(31,31,35,0.8)",
+                    borderBottom: "1px solid rgba(31,31,35,0.8)",
+                  }}
+                >
+                  <span
+                    className="w-2 h-2 shrink-0"
+                    style={{
+                      backgroundColor: tag.color,
+                      boxShadow: active ? `0 0 6px ${tag.color}` : "none",
+                    }}
+                  />
+                  <span className="flex-1 text-left">{tag.label}</span>
+                  <span className="font-mono text-[9px] tabular-nums opacity-70">
+                    {pad(count, 3)}
+                  </span>
+                </button>
+                {onRemoveTag && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemoveTag(tag.key);
+                    }}
+                    className="opacity-0 group-hover/tag:opacity-100 text-nerv-muted hover:text-nerv-red text-[10px] font-mono w-4 h-4 flex items-center justify-center transition-opacity"
+                    title="Remove tag"
+                  >
+                    {"\u2715"}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Add new tag */}
+          {adding ? (
+            <div className="flex items-center gap-1.5 mt-1">
+              <input
+                type="text"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleAdd();
+                  if (e.key === "Escape") {
+                    setAdding(false);
+                    setNewLabel("");
+                  }
+                }}
+                placeholder="TAG LABEL"
+                autoFocus
+                className="eva-cut-tr flex-1 bg-nerv-bg border border-nerv-orange/40 text-nerv-text text-[10px] font-mono px-2 py-1.5 outline-none focus:border-nerv-orange"
+              />
+              <button
+                type="button"
+                onClick={handleAdd}
+                className="tag-chip px-2 py-1 bg-nerv-orange/20 border border-nerv-orange/50 text-nerv-orange text-[9px] font-bold hover:bg-nerv-orange/30"
+              >
+                ADD
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAdding(false);
+                  setNewLabel("");
+                }}
+                className="text-nerv-muted hover:text-nerv-red text-[10px] font-mono px-1"
+              >
+                {"\u2715"}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAdding(true)}
+              className="mt-1 flex items-center gap-1.5 h-7 px-2 text-[10px] font-mono text-nerv-muted hover:text-nerv-orange transition-colors"
+            >
+              <span className="text-[12px] leading-none">+</span>
+              <span className="tracking-wider">ADD TAG</span>
+            </button>
+          )}
+
+          {activeTags.size > 0 && (
+            <div className="mt-1 text-[8px] font-mono text-nerv-muted text-center">
+              {activeTags.size} FILTER{activeTags.size > 1 ? "S" : ""} ACTIVE
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 });
 
@@ -501,6 +685,12 @@ function SidebarInner({
   stats,
   onDropFiles,
   selectedIds,
+  tags,
+  activeTags,
+  tagCounts,
+  onAddTag,
+  onRemoveTag,
+  onToggleActiveTag,
 }: SidebarProps) {
   // Folder expansion state is LOCAL to the sidebar.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -535,6 +725,18 @@ function SidebarInner({
           onDropFiles={onDropFiles}
           selectedIds={selectedIds}
         />
+
+        {/* Classification Tags — v2.5 §Module 3.3 */}
+        {tags && (
+          <TagSection
+            tags={tags}
+            activeTags={activeTags ?? new Set()}
+            tagCounts={tagCounts ?? new Map()}
+            onAddTag={onAddTag}
+            onRemoveTag={onRemoveTag}
+            onToggleActiveTag={onToggleActiveTag}
+          />
+        )}
 
         <StorageTelemetry stats={stats} />
       </div>
