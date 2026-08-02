@@ -11,6 +11,7 @@ import BootSequence from "./components/BootSequence";
 import MoveDialog from "./components/MoveDialog";
 import TitleBar from "./components/TitleBar";
 import ActivityLog, { type ActivityEntry } from "./components/ActivityLog";
+import SessionChangesModal from "./components/SessionChangesModal";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { formatBytes } from "./utils";
 import { useScanState } from "./hooks/useScanState";
@@ -161,6 +162,7 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
+  const [showSessionLog, setShowSessionLog] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isDragOver, setIsDragOver] = useState(false);
   /** Bumped by the R key; forces errored tiles to re-fetch their thumbnail. */
@@ -1262,6 +1264,21 @@ export default function App() {
         onClear={() => setActivityLog([])}
       />
 
+      {/* Session log badge button — opens full audit trail modal */}
+      {activityLog.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowSessionLog(true)}
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-4 py-1.5 bg-nerv-panel border border-nerv-orange/40 text-nerv-orange text-[10px] font-mono font-bold tracking-wider hover:bg-nerv-orange/10 hover:shadow-[0_0_12px_rgba(255,152,48,0.3)] transition-all"
+        >
+          <span className="w-1.5 h-1.5 bg-nerv-orange animate-pulse-soft" />
+          SESSION LOG
+          <span className="tag-chip bg-nerv-orange/20 px-1.5 py-0.5 text-[9px]">
+            {activityLog.length}
+          </span>
+        </button>
+      )}
+
       {/* Overlays */}
       {showHelp && <KeyboardHelp onClose={() => setShowHelp(false)} />}
       {showPalette && (
@@ -1281,6 +1298,19 @@ export default function App() {
           onOpenMedia={(f) => {
             setShowAnalytics(false);
             openViewer(f);
+          }}
+        />
+      )}
+
+      {/* Session Audit Trail Modal — v2.5 §Module 7 */}
+      {showSessionLog && (
+        <SessionChangesModal
+          open={showSessionLog}
+          entries={activityLog}
+          onClose={() => setShowSessionLog(false)}
+          onClear={() => {
+            setActivityLog([]);
+            setShowSessionLog(false);
           }}
         />
       )}
