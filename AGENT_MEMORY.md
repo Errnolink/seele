@@ -1,6 +1,6 @@
-﻿# AGENT MEMORY ÔÇö Wiergise Project
+﻿# AGENT MEMORY — seele Project (formerly Wiergise)
 
-## Operating Rule (MANDATORY ÔÇö read every session start)
+## Operating Rule (MANDATORY — read every session start)
 
 **ALWAYS TREAT THE CODE AS SOURCE OF TRUTH.**
 - NEVER assume from memory.
@@ -8,16 +8,31 @@
 - ALWAYS verify by reading the real file contents before acting on any belief about what the code does.
 - When a summary says "X was done," READ X and confirm it. Summaries lie; code doesn't.
 
-This rule exists because prior work on this project produced a V5 review summary that claimed fixes were applied, but the actual code did not match ÔÇö e.g. the "thumbnail downscaling" was implemented in a way that made performance *worse* (synchronous full-res decode on the main thread), contradicting the summary's "fixed" claim. Verify everything.
+This rule exists because prior work on this project produced a review summary that claimed fixes were applied, but the actual code did not match — e.g. "thumbnail downscaling" was implemented in a way that made performance *worse* (synchronous full-res decode on the main thread), contradicting the summary's "fixed" claim. Verify everything.
 
-## Project: Wiergise Media Scanner
+## Project: seele — Media Scanner (renamed from Wiergise, commit 8f48ca5)
 - Electron + React + TypeScript media browser, NERV tactical UI theme.
-- Branches: `ui/ux-upgrade` carries UI work + V5 review fixes.
-- App run on Windows: `cmd.exe /c npm run dev` (npx/npm don't spawn in PTY directly). Vite on port 5173.
-- Typecheck: `npm run typecheck` (renderer tsconfig.json + electron tsconfig.node.json).
-- Build: `npm run build`.
+- Working branch: `v2.5.1`. Remote: https://github.com/Errnolink/seele.git (push to `origin/v2.5.1`).
+- App on Windows runs in dev via: `cmd.exe /c "set ELECTRON_ENABLE_LOGGING=1 && npm run dev"` — concurrently starts vite (:5173) + `tsc --watch` (compiles to `dist-electron/`) + electron. Launch with `Start-Process` + redirect stdout/stderr to `%TEMP%\opencode\seele-devN.log` (stderr gets the `[electron] ... CONSOLE` lines; `[vite]`/`[tsc]` lines are prefixed too). Renderer console strings print, but OBJECT args print as `[object Object]` — always `JSON.stringify` in logs.
+- HMR hot-applies renderer edits (vite). **Main-process (electron/) edits require an electron restart**: tsc watch rebuilds `dist-electron/electron/main.js` automatically; only restart the electron process (children die with it; `vite`/`tsc` keep running). Relaunch electron with `ELECTRON_ENABLE_LOGGING=1` or renderer console output stops flowing.
+- Scripts: `typecheck:renderer` (tsconfig.json), `typecheck:electron` (tsconfig.node.json), `lint` (eslint . — flat config), `test` (vitest run; 35 tests in `src/renderer/*.test.ts`), `build`.
+- Project renamed to "seele": package name, window title, cache paths (`%LOCALAPPDATA%\seele\Cache`, tmp prefixes `seele-thumbs`), session download filenames. **Deliberately NOT renamed**: localStorage keys `wiergise:lastFolder`, `wiergise:tags`, `wiergise:tagAssignments` (would wipe user state).
+- **This model cannot read images.** UI bugs are diagnosed via console instrumentation (`console.log` + read the dev log), not screenshots.
+- Keep `AGENT_MEMORY.md` — user explicitly wants it. Stale reports/docs (`report.md`, `nvidia agent report.md`, `V2.5_TRACKER.md`, `UI_UX_DOCUMENTATION.md`, `v2.5 ui ux.md`) were deleted; user plans to write one doc later.
 
-## Key Architectural Notes
-- Media served via custom `media://local/<encoded-path>` protocol in `electron/main.ts`.
-- `?w=<width>` query param triggers server-side resize. Grid thumbnails use `?w=128..512`.
-- Image resize MUST stay off the main thread. `nativeImage.createFromBuffer` is SYNC and decodes the full-res bitmap ÔÇö it freezes the Electron main process. Use `sharp` (libvips, off-thread) instead.
+## Key Architecture
+- Media served via custom `media://local/<percent-encoded-path>` protocol in `electron/main.ts` (host sentinel "local"; strip leading `/` on win32; `file:///` needs THREE slashes for drive letters). Path-traversal guard `isUnderAllowedRoot` (allowed scan roots).
+- `?w=<width>` triggers server-side resize: videos → ffmpeg frame extract, images → sharp. Grid thumbs use `?w=128..512`.
+- Image resize MUST stay off the main thread. `nativeImage.createFromBuffer` is SYNC and decodes full-res — freezes main. Use `sharp`. `withSharpLimit` semaphore (SHARP_CONCURRENCY=4) bounds concurrent decodes.
+- Thumbnail cache, two tiers (electron/main.ts): RAM LRU `thumbCache` (THUMB_CACHE_MAX=150) + disk under `%LOCALAPPDATA%\seele\Cache\thumbs` sharded `<sha1[:2]>/<sha1>`. `storeThumb`/`lookupThumb` async best-effort (sync writes froze scrolling). **Disk tier is bounded by `pruneThumbCache`**: THUMB_DISK_MAX_FILES=5000 / THUMB_DISK_MAX_BYTES=512MB, oldest-first by mtime, throttled to once/60s, invoked from `storeThumb` + at startup in `app.whenReady`.
+- Insights (`file:insights` IPC): partial sha1 (first/last 64KB + size), then median-cut palette (`medianCutPalette` in main.ts — 4 colors from 48px raw preview via `sharp().resize(48).removeAlpha().flatten().raw()`; sorted by population; fallback to `stats().dominant`) + best-effort EXIF camera parse (`parseExif` scans latin1 dump for Make/Model/Lens/FNumber/ISO/ExposureTime). Videos: one ffmpeg frame at ~1s. Renderer: `InspectorCard` in MasonryGrid.tsx fetches via `window.scanAPI.getFileInsights`; `.catch` resets loading (stuck-skeleton bug fixed).
+- Scan runs in a worker (`electron/scanWorker.ts`); progress coalesced in `useScanState` (150ms last-write-wins); `media-cache.json` persisted under userData (`AppData\Roaming\seele`).
+- Context menus: sidebar tree rows get `onFolderContextMenu` threaded Sidebar → DirectoryExplorer → FolderTreeNode (preventDefault + stopPropagation; row span `flex-1 truncate` had none before — fixed in 2b88982). Folder-view cards use FolderBrowser → App `folderContextMenu`.
+
+## Recent v2.5.1 Commits
+- `0ade0e2` perf: windowed masonry rendering (O(visible) via binary-search columns + arithmetic rows), async thumbnail cache I/O, render-path optimizations (memoization, deferred folder tree, batch favorite updates, progress coalescing).
+- `8f48ca5` chore: rename Wiergise → seele.
+- `2b88982` fix: sidebar folder context menu; median-cut color spectrum (was 4× identical washed-out average); disk cache eviction.
+- `3f78659` chore: deleted stale docs/reports.
+- `2538867` chore: restored AGENT_MEMORY.md.
+- v2.5 module work (a1c6d2d + earlier): FolderBrowser, RenameDialog, BatchTagDialog, tags system, session changes export (`SessionChangesModal` → `seele-session-*.json`).
