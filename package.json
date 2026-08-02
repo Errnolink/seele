@@ -1,6 +1,6 @@
 {
-  "//": "Wiergise Media Scanner — local media file scanner and browser",
-  "name": "wiergise-media-scanner",
+  "//": "Seele — local media file scanner and browser",
+  "name": "seele",
   "version": "1.0.0",
   "private": true,
   "main": "dist-electron/electron/main.js",

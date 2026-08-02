@@ -176,7 +176,7 @@ function getThumbDir(): string {
   if (!thumbDir) {
     let base: string;
     if (process.platform === "win32" && process.env.LOCALAPPDATA) {
-      base = path.join(process.env.LOCALAPPDATA, "wiergise-media-scanner", "Cache");
+      base = path.join(process.env.LOCALAPPDATA, "seele", "Cache");
     } else {
       base = path.join(app.getPath("userData"), "thumbs");
     }
@@ -184,7 +184,7 @@ function getThumbDir(): string {
       thumbDir = path.join(base, "thumbs");
       fs.mkdirSync(thumbDir, { recursive: true });
     } catch {
-      thumbDir = path.join(tmpdir(), "wiergise-thumbs");
+      thumbDir = path.join(tmpdir(), "seele-thumbs");
       fs.mkdirSync(thumbDir, { recursive: true });
     }
   }
@@ -334,7 +334,7 @@ async function serveVideoThumb(
   }
   const ff = await findFfmpeg();
   if (!ff) return null;
-  const tmpFile = path.join(tmpdir(), `wiergise-thumb-${randomBytes(6).toString("hex")}.jpg`);
+  const tmpFile = path.join(tmpdir(), `seele-thumb-${randomBytes(6).toString("hex")}.jpg`);
   try {
     // Extract frame inside the concurrency gate so a grid of 50 videos
     // doesn't spawn 50 ffmpeg processes at once.
@@ -809,7 +809,7 @@ async function decodeBufferForInsights(
   // Video: extract one frame at ~1s into a JPEG buffer.
   const ff = await findFfmpeg();
   if (!ff) return null;
-  const tmpFile = path.join(tmpdir(), `wiergise-insight-${randomBytes(6).toString("hex")}.jpg`);
+  const tmpFile = path.join(tmpdir(), `seele-insight-${randomBytes(6).toString("hex")}.jpg`);
   try {
     await withFfmpegLimit(() =>
       new Promise<void>((resolve, reject) => {

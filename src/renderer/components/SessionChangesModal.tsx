@@ -79,7 +79,7 @@ export const SessionChangesModal: React.FC<SessionChangesModalProps> = memo(
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `wiergise-session-${Date.now()}.json`;
+      a.download = `seele-session-${Date.now()}.json`;
       a.click();
       URL.revokeObjectURL(url);
     };

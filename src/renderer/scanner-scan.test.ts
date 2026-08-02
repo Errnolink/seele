@@ -10,7 +10,7 @@ const tempDirs: string[] = [];
 /** Build a small tree: 3 images (one uppercase ext, one dotfile), 2 videos,
  *  plus non-media files that must be ignored. */
 function makeTree(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "wiergise-scan-"));
+  const root = mkdtempSync(path.join(tmpdir(), "seele-scan-"));
   tempDirs.push(root);
   mkdirSync(path.join(root, "sub", "deep"), { recursive: true });
   writeFileSync(path.join(root, "a.jpg"), Buffer.alloc(64));
@@ -76,7 +76,7 @@ describe("scanFolder", () => {
   });
 
   it("returns an empty array for an empty directory", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "wiergise-scan-"));
+    const root = mkdtempSync(path.join(tmpdir(), "seele-scan-"));
     tempDirs.push(root);
     expect(await scanFolder(root)).toEqual([]);
   });

@@ -36,7 +36,7 @@ module.exports = tseslint.config(
     files: block.files ?? ['**/*.{ts,tsx}'],
   })),
   {
-    name: 'wiergise/renderer',
+    name: 'seele/renderer',
     files: ['src/renderer/**/*.{ts,tsx}'],
     plugins: {
       'react-hooks': reactHooks,
@@ -49,7 +49,7 @@ module.exports = tseslint.config(
     },
   },
   {
-    name: 'wiergise/electron',
+    name: 'seele/electron',
     files: ['electron/**/*.ts', 'src/scanner/**/*.ts'],
   },
 );

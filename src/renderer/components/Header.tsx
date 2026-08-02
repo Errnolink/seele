@@ -223,7 +223,7 @@ export function Header(props: HeaderProps) {
 
           {/* Brand block — plain amber wordmark, no gradient icon */}
           <div className="shrink-0 flex items-center gap-2 pr-3 border-r border-nerv-border/60">
-            <span className="eva-title text-[16px] text-nerv-amber">Wiergise</span>
+            <span className="eva-title text-[16px] text-nerv-amber">Seele</span>
             <span className="text-[9px] text-nerv-muted">v2.5</span>
           </div>
 
