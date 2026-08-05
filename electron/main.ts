@@ -455,18 +455,8 @@ async function serveResized(
   requested: string,
   w: number,
 ): Promise<Response | null> {
-  const cacheKey = `${requested}?w=${w}`;
-  const cached = await lookupThumb(cacheKey);
-  if (cached) {
-    return new Response(cached as unknown as BodyInit, {
-      headers: {
-        "Content-Type": sniffThumbType(cached),
-        "Cache-Control": "public, max-age=86400",
-      },
-    });
-  }
-  // Read the file header once, up front, so both the animated-GIF branch
-  // and the HEIC-inside-catch branch reuse the same bytes instead of
+  // Read the file header once, up front, so the animated-GIF decision and
+  // the HEIC-inside-catch fallback reuse the same bytes instead of
   // re-opening the file. Best-effort: on error we just skip sniffing.
   let header: Uint8Array | null = null;
   try {
@@ -481,11 +471,16 @@ async function serveResized(
   } catch {
     header = null;
   }
+  const isAnimGif = header !== null && isAnimatedGif(header);
+
   // Animated GIFs: serve a resized animated GIF (sharp with `animated`)
-  // so grid tiles animate too, not just the fullscreen viewer. Cached
-  // under a distinct key so the static first-frame thumb (below) can
-  // still coexist where a caller prefers it.
-  if (header && isAnimatedGif(header)) {
+  // so grid tiles animate too, not just the fullscreen viewer. They use
+  // their own cache key and MUST NOT consult the plain `?w=` tier first —
+  // that tier can hold a stale static first-frame (written before animated
+  // thumbs existed, or by the static fallback below) which would otherwise
+  // shadow the animated version forever. If the animated render fails,
+  // fall through to the static first-frame path.
+  if (isAnimGif) {
     const animKey = `${requested}?w=${w}&gifanim=1`;
     const animCached = await lookupThumb(animKey);
     if (animCached) {
@@ -511,6 +506,17 @@ async function serveResized(
     } catch (e) {
       if (!app.isPackaged) console.debug("[media] animated gif resized failed:", e);
     }
+  }
+
+  const cacheKey = `${requested}?w=${w}`;
+  const cached = await lookupThumb(cacheKey);
+  if (cached) {
+    return new Response(cached as unknown as BodyInit, {
+      headers: {
+        "Content-Type": sniffThumbType(cached),
+        "Cache-Control": "public, max-age=86400",
+      },
+    });
   }
   try {
     // Skip huge raws to bound memory/time — serve them as a stream.
