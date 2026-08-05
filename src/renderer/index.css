@@ -114,13 +114,12 @@ textarea,
  *  CRT screen overlay (§2.4) — layered phosphor tube effect.
  *
  *  Static layers (single-pass backgrounds, no repaint):
- *    1. scanline mask   — every other line slightly darkened
- *    2. aperture grille — faint RGB phosphor micro-stripes
- *    3. vignette        — darkening toward the tube edges (fake curvature)
+ *    1. scanline mask — every other line slightly darkened
+ *    2. vignette      — darkening toward the tube edges (fake curvature)
  *  Animated layers (compositor-only, both killed by the reduce-motion
  *  rules below):
- *    4. ::after         — rolling refresh band (transform translateY)
- *    5. element flicker — near-imperceptible phosphor dips (opacity)
+ *    3. ::after       — rolling refresh band (transform translateY)
+ *    4. element flicker — near-imperceptible phosphor dips (opacity)
  * ========================================================================= */
 .crt-overlay {
   position: fixed;
@@ -129,13 +128,6 @@ textarea,
   z-index: 9999;
   background:
     radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.16) 100%),
-    repeating-linear-gradient(
-      to right,
-      rgba(255, 60, 60, 0.025) 0 1px,
-      rgba(60, 255, 60, 0.025) 1px 2px,
-      rgba(60, 60, 255, 0.025) 2px 3px,
-      transparent 3px 6px
-    ),
     repeating-linear-gradient(
       to bottom,
       transparent 0 2px,
