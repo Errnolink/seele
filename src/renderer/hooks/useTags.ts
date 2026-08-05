@@ -136,14 +136,6 @@ export function useTags() {
     });
   }, []);
 
-  const setFileTags = useCallback((filePath: string, tagKeys: string[]) => {
-    setAssignments((prev) => {
-      const next = new Map(prev);
-      next.set(filePath, new Set(tagKeys));
-      return next;
-    });
-  }, []);
-
   /** Batch-assign a tag to multiple file paths. */
   const batchAssign = useCallback((filePaths: string[], tagKey: string, assign: boolean) => {
     setAssignments((prev) => {
@@ -166,8 +158,6 @@ export function useTags() {
       return copy;
     });
   }, []);
-
-  const clearActiveTags = useCallback(() => setActiveTags(new Set()), []);
 
   // Precomputed per-file resolved tags. Rebuilt only when tags/assignments
   // change; getFileTags then answers in O(1) with a STABLE array reference
@@ -205,22 +195,6 @@ export function useTags() {
     return counts;
   }, [assignments]);
 
-  /** Filter file paths by active tags — returns null if no filter active. */
-  const filterByTags = useCallback(
-    (files: { filePath: string }[]): { filePath: string }[] | null => {
-      if (activeTags.size === 0) return null;
-      return files.filter((f) => {
-        const tagSet = assignments.get(f.filePath);
-        if (!tagSet) return false;
-        for (const active of activeTags) {
-          if (tagSet.has(active)) return true;
-        }
-        return false;
-      });
-    },
-    [activeTags, assignments],
-  );
-
   return {
     tags,
     activeTags,
@@ -228,12 +202,9 @@ export function useTags() {
     addTag,
     removeTag,
     toggleFileTag,
-    setFileTags,
     batchAssign,
     toggleActiveTag,
-    clearActiveTags,
     getFileTags,
-    filterByTags,
   };
 }
 
@@ -247,10 +218,7 @@ export interface UseTagsReturn {
   addTag: (label: string, category?: TagDef["category"]) => string;
   removeTag: (key: string) => void;
   toggleFileTag: (filePath: string, tagKey: string) => void;
-  setFileTags: (filePath: string, tagKeys: string[]) => void;
   batchAssign: (filePaths: string[], tagKey: string, assign: boolean) => void;
   toggleActiveTag: (key: string) => void;
-  clearActiveTags: () => void;
   getFileTags: (filePath: string) => TagDef[];
-  filterByTags: (files: { filePath: string }[]) => { filePath: string }[] | null;
 }

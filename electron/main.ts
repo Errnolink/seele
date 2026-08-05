@@ -420,6 +420,59 @@ async function extractFrameWithFfmpeg(
   }
 }
 
+/** Wrap thumbnail bytes in a cacheable Response. */
+function thumbResponse(bytes: Uint8Array, contentType: string): Response {
+  return new Response(bytes as unknown as BodyInit, {
+    headers: { "Content-Type": contentType, "Cache-Control": "public, max-age=86400" },
+  });
+}
+
+/** Memoized source-header sniff (animated-GIF / HEIC routing).
+ *  Keyed on size+mtime so edits invalidate. Without this, every thumbnail
+ *  request — including two-tier cache hits — re-opens and re-reads the
+ *  source file header (audit A2). */
+const HEADER_SNIFF_MAX = 500;
+const headerSniffCache = new Map<
+  string,
+  { isAnimatedGif: boolean; isHeic: boolean }
+>();
+
+async function sniffHeader(
+  requested: string,
+): Promise<{ isAnimatedGif: boolean; isHeic: boolean } | null> {
+  try {
+    const stat = await fs.promises.stat(requested);
+    const key = `${requested}:${stat.size}:${stat.mtimeMs}`;
+    const hit = headerSniffCache.get(key);
+    if (hit) {
+      headerSniffCache.delete(key);
+      headerSniffCache.set(key, hit); // LRU bump.
+      return hit;
+    }
+    const fh = await fs.promises.open(requested, "r");
+    let result: { isAnimatedGif: boolean; isHeic: boolean };
+    try {
+      const buf = Buffer.alloc(1024);
+      const { bytesRead } = await fh.read(buf, 0, 1024, 0);
+      const header = new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
+      result = {
+        isAnimatedGif: isAnimatedGif(header),
+        isHeic: isHeicContent(header),
+      };
+    } finally {
+      await fh.close().catch(() => {});
+    }
+    headerSniffCache.set(key, result);
+    if (headerSniffCache.size > HEADER_SNIFF_MAX) {
+      const oldest = headerSniffCache.keys().next().value;
+      if (oldest !== undefined) headerSniffCache.delete(oldest);
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}
+
 /** Extract a single frame from a video at ~1s and resize it. Cached in
  *  the two-tier thumbnail cache (RAM LRU + disk). Returns a JPEG Response
  *  or null if ffmpeg fails. */
@@ -430,17 +483,13 @@ async function serveVideoThumb(
   const cacheKey = `${requested}?w=${w}&vid=1`;
   const cached = await lookupThumb(cacheKey);
   if (cached) {
-    return new Response(cached as unknown as BodyInit, {
-      headers: { "Content-Type": sniffThumbType(cached), "Cache-Control": "public, max-age=86400" },
-    });
+    return thumbResponse(cached, sniffThumbType(cached));
   }
   const buf = await extractFrameWithFfmpeg(requested, w);
   if (!buf) return null;
   const bytes = new Uint8Array(buf);
   storeThumb(cacheKey, bytes);
-  return new Response(bytes as unknown as BodyInit, {
-    headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
-  });
+  return thumbResponse(bytes, "image/jpeg");
 }
 
 
@@ -455,23 +504,11 @@ async function serveResized(
   requested: string,
   w: number,
 ): Promise<Response | null> {
-  // Read the file header once, up front, so the animated-GIF decision and
-  // the HEIC-inside-catch fallback reuse the same bytes instead of
-  // re-opening the file. Best-effort: on error we just skip sniffing.
-  let header: Uint8Array | null = null;
-  try {
-    const fh = await fs.promises.open(requested, "r");
-    try {
-      const buf = Buffer.alloc(1024);
-      const { bytesRead } = await fh.read(buf, 0, 1024, 0);
-      header = new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
-    } finally {
-      await fh.close().catch(() => {});
-    }
-  } catch {
-    header = null;
-  }
-  const isAnimGif = header !== null && isAnimatedGif(header);
+  // Memoized header sniff drives the animated-GIF decision and the
+  // HEIC-inside-catch fallback without re-opening the source file on
+  // every request (audit A2). Best-effort: on error we skip sniffing.
+  const sniff = await sniffHeader(requested);
+  const isAnimGif = sniff?.isAnimatedGif ?? false;
 
   // Animated GIFs: serve a resized animated GIF (sharp with `animated`)
   // so grid tiles animate too, not just the fullscreen viewer. They use
@@ -484,12 +521,7 @@ async function serveResized(
     const animKey = `${requested}?w=${w}&gifanim=1`;
     const animCached = await lookupThumb(animKey);
     if (animCached) {
-      return new Response(animCached as unknown as BodyInit, {
-        headers: {
-          "Content-Type": "image/gif",
-          "Cache-Control": "public, max-age=86400",
-        },
-      });
+      return thumbResponse(animCached, "image/gif");
     }
     try {
       const bytes = await withSharpLimit(() =>
@@ -500,9 +532,7 @@ async function serveResized(
       );
       const out = new Uint8Array(bytes);
       storeThumb(animKey, out);
-      return new Response(out as unknown as BodyInit, {
-        headers: { "Content-Type": "image/gif", "Cache-Control": "public, max-age=86400" },
-      });
+      return thumbResponse(out, "image/gif");
     } catch (e) {
       if (!app.isPackaged) console.debug("[media] animated gif resized failed:", e);
     }
@@ -511,12 +541,7 @@ async function serveResized(
   const cacheKey = `${requested}?w=${w}`;
   const cached = await lookupThumb(cacheKey);
   if (cached) {
-    return new Response(cached as unknown as BodyInit, {
-      headers: {
-        "Content-Type": sniffThumbType(cached),
-        "Cache-Control": "public, max-age=86400",
-      },
-    });
+    return thumbResponse(cached, sniffThumbType(cached));
   }
   try {
     // Skip huge raws to bound memory/time — serve them as a stream.
@@ -539,18 +564,13 @@ async function serveResized(
     });
     const out = new Uint8Array(bytes);
     storeThumb(cacheKey, out);
-    return new Response(out as unknown as BodyInit, {
-      headers: {
-        "Content-Type": hasAlpha ? "image/png" : "image/jpeg",
-        "Cache-Control": "public, max-age=86400",
-      },
-    });
+    return thumbResponse(out, hasAlpha ? "image/png" : "image/jpeg");
   } catch (e) {
     // Unsupported format / corrupt file → fall back to raw stream.
     if (!app.isPackaged) console.debug("[media] resize failed:", e);
     // HEIC/HEIF content (by magic, not extension — a .jpg file can carry
     // HEIC bytes) may fail sharp/libheif; retry via ffmpeg frame extract.
-    if (header && isHeicContent(header)) {
+    if (sniff?.isHeic) {
       // HEIC stills are tiled HEVC grids: ffmpeg rejects -ss/-vf scale,
       // so extract the full-res frame and downscale with sharp.
       const buf = await extractFrameWithFfmpeg(requested, w, { heic: true });
@@ -564,9 +584,7 @@ async function serveResized(
         );
         const out = new Uint8Array(bytes);
         storeThumb(`${requested}?w=${w}&heic=1`, out);
-        return new Response(out as unknown as BodyInit, {
-          headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
-        });
+        return thumbResponse(out, "image/jpeg");
       }
     }
     return null;

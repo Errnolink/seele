@@ -157,7 +157,7 @@ export const FolderBrowser = memo(function FolderBrowser({
   const subfolders = viewingNode.children;
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto p-4 gap-4">
+    <div className="flex flex-col h-full overflow-y-auto p-4 gap-4 animate-fade-in">
       {/* ── BREADCRUMB EXPLORER HEADER ── */}
       <div className="flex items-center justify-between border-b border-nerv-border/60 pb-3 gap-3">
         <div className="flex items-center gap-2 min-w-0">

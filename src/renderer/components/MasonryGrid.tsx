@@ -87,7 +87,13 @@ export interface MasonryGridProps {
 /** Build a media URL for a tile, requesting a sharp thumbnail for images. */
 function tileUrl(file: MediaFile, tileWidth: number): string {
   const base = window.scanAPI.toMediaUrl(file.filePath);
-  const w = Math.min(THUMB_MAX, Math.max(THUMB_MIN, Math.round(tileWidth * 1.5)));
+  // Quantize to 32px buckets so resize/density changes reuse cached
+  // thumbnails instead of fragmenting the two-tier cache with a
+  // continuous width range (audit A3).
+  const w = Math.min(
+    THUMB_MAX,
+    Math.max(THUMB_MIN, Math.round((Math.round(tileWidth * 1.5) / 32) * 32)),
+  );
   // Both images and videos get ?w= — the main process routes video
   // thumbnails through ffmpeg frame extraction.
   return `${base}?w=${w}`;
@@ -222,7 +228,7 @@ const MediaCard = memo(function MediaCard({
             }}
             onError={() => setError(true)}
             className={[
-              "w-full h-full object-cover transition-transform duration-300 group-hover:scale-105",
+              "w-full h-full object-cover transition-[transform,opacity] duration-300 group-hover:scale-105",
               loaded ? "opacity-100" : "opacity-0",
             ].join(" ")}
             draggable={false}
@@ -705,7 +711,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
   // pinned right column with its own scroll and a divider border.
   if (viewMode === "split") {
     return (
-      <div className="flex h-full w-full overflow-hidden">
+      <div className="flex h-full w-full overflow-hidden animate-fade-in">
         <div
           ref={scrollRef}
           onScroll={onScroll}
@@ -831,7 +837,7 @@ const MasonryView = memo(function MasonryView({
   }, [sections, top, bottom]);
 
   return (
-    <div className="relative w-full" style={{ height: `${totalHeight}px` }}>
+    <div className="relative w-full animate-fade-in" style={{ height: `${totalHeight}px` }}>
       {visibleHeaders.map((h) => (
         <div
           key={`hdr-${h.label}`}
@@ -981,7 +987,7 @@ const GridView = memo(function GridView({
       : 0;
 
   return (
-    <div className="relative w-full" style={{ height: `${totalHeight}px` }}>
+    <div className="relative w-full animate-fade-in" style={{ height: `${totalHeight}px` }}>
       {visible.headers.map((h) => (
         <div
           key={`hdr-${h.label}`}
@@ -1107,7 +1113,7 @@ const ListView = memo(function ListView({
       : 0;
 
   return (
-    <div className="relative w-full" style={{ height: `${totalHeight}px` }}>
+    <div className="relative w-full animate-fade-in" style={{ height: `${totalHeight}px` }}>
       {/* Sticky-ish column header at the top of the scroll area */}
       <div
         className="absolute left-0 right-0 z-10 flex items-center bg-nerv-panel text-nerv-muted text-[10px] font-mono font-normal border-b border-nerv-border"

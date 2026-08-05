@@ -93,7 +93,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-start justify-center bg-black/80 p-4 pt-[12vh] backdrop-blur-sm"
+      className="fixed inset-0 z-[80] flex items-start justify-center bg-black/80 p-4 pt-[12vh] backdrop-blur-sm animate-fade-in"
       onClick={onClose}
     >
       <div

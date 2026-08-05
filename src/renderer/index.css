@@ -163,14 +163,6 @@ textarea,
   );
 }
 
-/* Single Bottom-Left Chamfer (chips, sort buttons). */
-.eva-cut-bl {
-  clip-path: polygon(
-    0 0, 100% 0, 100% 100%,
-    6px 100%, 0 calc(100% - 6px)
-  );
-}
-
 /* Diagonal Parallelogram (action buttons, view tabs). */
 .eva-shear {
   clip-path: polygon(
@@ -186,11 +178,6 @@ textarea,
   );
 }
 
-/* One top-right chamfer. Only for larger panels (logo block, search field). */
-.eva-corner {
-  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
-}
-
 /* Fill / skin classes --------------------------------------------------- */
 /* Shared bevel contract: 3-stop vertical gradient, inset top highlight +
    bottom dark edge, tight colour halo, dark text, brightness hover. */
@@ -200,12 +187,6 @@ textarea,
   color: #221100;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35),
     inset 0 -2px 0 rgba(0, 0, 0, 0.3), 0 0 10px rgba(255, 183, 0, 0.35);
-}
-.eva-fill-purple {
-  background: linear-gradient(180deg, #a78bfa 0%, #7c3aed 55%, #5b21b6 100%);
-  color: #14092c;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35),
-    inset 0 -2px 0 rgba(0, 0, 0, 0.3), 0 0 10px rgba(124, 58, 237, 0.35);
 }
 .eva-fill-lime {
   background: linear-gradient(180deg, #d9f99d 0%, #a3e635 55%, #65a30d 100%);
@@ -234,7 +215,6 @@ textarea,
 
 /* Brightness hover for every bevel fill. */
 .eva-fill-amber:hover,
-.eva-fill-purple:hover,
 .eva-fill-lime:hover,
 .eva-fill-cyan:hover,
 .eva-fill-green:hover,
@@ -250,18 +230,6 @@ textarea,
 .eva-dim:hover {
   color: #ffb700;
   filter: brightness(1.15);
-}
-
-/* Bordered readout panel: 1px orange skin wrapping a dark ticket inner. */
-.eva-frame {
-  background: rgba(255, 152, 48, 0.45);
-  padding: 1px;
-  box-shadow: 0 0 8px rgba(255, 152, 48, 0.18);
-}
-.eva-inner {
-  background: #0a0a0c;
-  color: #ff9830;
-  text-shadow: 0 0 5px rgba(255, 152, 48, 0.5);
 }
 
 /* Small square button: dark square, 1px amber border, orange glyph. */
@@ -338,10 +306,11 @@ textarea,
 /* =========================================================================
  *  Loading shimmer skeleton (§4) — media card placeholder.
  *
- *  Default: gradient sweep. Under reduced motion (OS-level or the in-app
- *  Reduce Motion setting) it switches to a pure opacity pulse — opacity
- *  is GPU-composited, while animating background-position forces a
- *  repaint on every loading tile (issues.md item 2).
+ *  Opacity pulse on the gradient (GPU-composited). The old gradient sweep
+ *  animated background-position, forcing a repaint on every loading tile
+ *  every frame — a virtualized grid can show 50+ shimmers at once
+ *  (issues.md item 2). The reduce-motion blocks below keep the pulse and
+ *  drop the gradient to a flat tone.
  * ========================================================================= */
 .shimmer {
   background: linear-gradient(
@@ -351,7 +320,7 @@ textarea,
     rgba(30, 34, 53, 0.4) 63%
   );
   background-size: 200% 100%;
-  animation: shimmer-sweep 2s infinite;
+  animation: shimmer-pulse 1.4s ease-in-out infinite;
 }
 
 /* =========================================================================

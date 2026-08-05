@@ -21,6 +21,7 @@ import { DEFAULT_SETTINGS } from "./settingsDefaults";
 import type { AppSettings } from "../../electron/settings";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { formatBytes } from "./utils";
+import { LARGE_FILE_BYTES } from "./types";
 import { useScanState } from "./hooks/useScanState";
 import { useTags } from "./hooks/useTags";
 import type {
@@ -37,7 +38,6 @@ import type { ScanProgress } from "../scanner/types";
 import type { MediaId } from "./types";
 
 const SEARCH_DEBOUNCE_MS = 200;
-const LARGE_FILE_BYTES = 50 * 1024 * 1024;
 
 /**
  * Build a nested folder tree from the flat file list (§10.1).
@@ -720,6 +720,28 @@ export default function App() {
     });
   }, []);
 
+  // ---- MasonryGrid call-site callbacks ----
+  // Stable identities so the memoized MasonryView/GridView/ListView and
+  // their MediaCard tiles don't re-render on every App state change
+  // (audit A1 — inline closures here busted every memoized child).
+  const onGridRename = useCallback((f: MediaFile) => {
+    setRenameDialogFile(f);
+  }, []);
+  const onGridContextMenu = useCallback((file: MediaFile, e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenu({ file, x: e.clientX, y: e.clientY });
+  }, []);
+  const onGridInspect = useCallback(
+    (file: MediaFile) => {
+      setActiveInspectFile(file);
+      if (viewMode !== "split") openViewer(file);
+    },
+    [viewMode, openViewer],
+  );
+  const onGridCloseInspector = useCallback(() => {
+    setActiveInspectFile(null);
+  }, []);
+
   // ---- keyboard shortcuts (§11) ----
   // Refs so the keyboard handler can call latest handlers without deps churn.
   const handleMoveSelectedRef = useRef(handleMoveSelected);
@@ -1215,7 +1237,7 @@ export default function App() {
         {/* Main content */}
         <main className="flex-1 min-w-0 h-full relative overflow-hidden bg-nerv-bg">
           {showIdleState ? (
-            <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-5 p-8 text-center">
+            <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-5 p-8 text-center animate-fade-in">
               <svg
                 viewBox="0 0 24 24"
                 width="64"
@@ -1265,7 +1287,7 @@ export default function App() {
               }
             />
           ) : groups.length === 0 || resultCount === 0 ? (
-            <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-3">
+            <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-3 animate-fade-in">
               <svg
                 viewBox="0 0 24 24"
                 width="48"
@@ -1292,18 +1314,12 @@ export default function App() {
               onToggleSelect={toggleSelect}
               onOpen={openViewer}
               onMove={handleMoveFile}
-              onRename={(f) => setRenameDialogFile(f)}
+              onRename={onGridRename}
               onTrash={handleTrashFile}
               onToggleFavorite={toggleFavorite}
-              onContextMenu={(file, e) => {
-                e.preventDefault();
-                setContextMenu({ file, x: e.clientX, y: e.clientY });
-              }}
-              onInspect={(file) => {
-                setActiveInspectFile(file);
-                if (viewMode !== "split") openViewer(file);
-              }}
-              onCloseInspector={() => setActiveInspectFile(null)}
+              onContextMenu={onGridContextMenu}
+              onInspect={onGridInspect}
+              onCloseInspector={onGridCloseInspector}
               activeInspectFile={activeInspectFile}
               reloadEpoch={reloadEpoch}
               overscan={settings.overscan}

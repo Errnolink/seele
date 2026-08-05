@@ -624,6 +624,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                   style={{
                     transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
                     transformOrigin: "center",
+                    transition: isPanning ? "none" : "transform 150ms ease-out",
                     willChange: zoom > 1 ? "transform" : "auto",
                   }}
                 />
@@ -643,6 +644,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                       opacity: fullResLoaded ? 1 : 0,
                       transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
                       transformOrigin: "center",
+                      transition: isPanning ? "none" : "transform 150ms ease-out",
                       willChange: "transform",
                     }}
                   />

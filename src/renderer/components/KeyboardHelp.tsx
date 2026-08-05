@@ -19,7 +19,6 @@ const SHORTCUTS: { section: string; entries: ShortcutEntry[] }[] = [
   {
     section: "View",
     entries: [
-      { keys: ["Ctrl", "F"], label: "Focus search" },
       { keys: ["?"], label: "Toggle this help" },
     ],
   },
@@ -59,7 +58,7 @@ export const KeyboardHelp: React.FC<KeyboardHelpProps> = ({ onClose }) => {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-nerv-bg/80 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-nerv-bg/80 backdrop-blur-sm animate-fade-in"
       onClick={onClose}
     >
       <div
