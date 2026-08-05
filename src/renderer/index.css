@@ -111,15 +111,18 @@ textarea,
 }
 
 /* =========================================================================
- *  CRT screen overlay (§2.4) — layered phosphor tube effect.
+ *  NERV CRT effects (§2.4) — canonical NERV Operations Console look.
+ *  Every screen carries: scanlines, edge vignette, phosphor flicker, and
+ *  a moving scan line — atmosphere that never compromises readability
+ *  (scanline opacity capped at ~4-6%, per the nerv-ui CRT spec).
  *
- *  Static layers (single-pass backgrounds, no repaint):
- *    1. scanline mask — every other line slightly darkened
- *    2. vignette      — darkening toward the tube edges (fake curvature)
- *  Animated layers (compositor-only, both killed by the reduce-motion
- *  rules below):
- *    3. ::after       — rolling refresh band (transform translateY)
- *    4. element flicker — near-imperceptible phosphor dips (opacity)
+ *  Static layers on .crt-overlay (single-pass backgrounds, no repaint):
+ *    1. scanline mask — 4% black, 4px period
+ *    2. edge vignette — tube-edge darkening (fake curvature)
+ *  Animated (compositor-only):
+ *    3. .crt-overlay::after — 2px phosphor-green moving scan line
+ *    4. body — phosphor flicker (whole-screen brightness dip)
+ *  All four are killed by the reduce-motion rules below.
  * ========================================================================= */
 .crt-overlay {
   position: fixed;
@@ -127,65 +130,60 @@ textarea,
   pointer-events: none;
   z-index: 9999;
   background:
-    radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.16) 100%),
     repeating-linear-gradient(
-      to bottom,
-      transparent 0 2px,
-      rgba(0, 0, 0, 0.13) 2px 3px
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.04) 2px,
+      rgba(0, 0, 0, 0.04) 4px
+    ),
+    radial-gradient(
+      ellipse 70% 70% at center,
+      transparent 50%,
+      rgba(0, 0, 0, 0.4) 100%
     );
-  animation: crt-flicker 5s linear infinite;
 }
 
-/* Rolling refresh band — the classic CRT roll. */
+/* Moving scan line — a thin phosphor-green line sweeping down the tube. */
 .crt-overlay::after {
   content: "";
   position: absolute;
+  top: 0;
   left: 0;
   right: 0;
-  height: 90px;
+  height: 2px;
   background: linear-gradient(
-    to bottom,
-    transparent,
-    rgba(200, 220, 255, 0.05) 45%,
-    rgba(200, 220, 255, 0.075) 50%,
-    rgba(200, 220, 255, 0.05) 55%,
-    transparent
+    90deg,
+    transparent 0%,
+    rgba(80, 255, 80, 0.15) 20%,
+    rgba(80, 255, 80, 0.3) 50%,
+    rgba(80, 255, 80, 0.15) 80%,
+    transparent 100%
   );
-  animation: crt-roll 7s linear infinite;
+  opacity: 0.5;
+  animation: scan-line 4s linear infinite;
 }
 
-/* Two brief brightness dips per cycle — reads as phosphor instability
-   rather than a breathing glow. */
-@keyframes crt-flicker {
-  0% {
-    opacity: 1;
-  }
-  47% {
-    opacity: 1;
-  }
-  49% {
-    opacity: 0.96;
-  }
-  51% {
-    opacity: 1;
-  }
-  76% {
-    opacity: 1;
-  }
-  78% {
-    opacity: 0.98;
-  }
-  80% {
-    opacity: 1;
-  }
+/* Whole-screen phosphor flicker — one brief brightness dip per cycle. */
+body {
+  animation: phosphor-flicker 4s ease-in-out infinite;
+}
+
+@keyframes phosphor-flicker {
+  0%,
+  92%,
+  94%,
   100% {
     opacity: 1;
   }
+  93% {
+    opacity: 0.96;
+  }
 }
 
-@keyframes crt-roll {
+@keyframes scan-line {
   0% {
-    transform: translateY(-90px);
+    transform: translateY(-100%);
   }
   100% {
     transform: translateY(100vh);
@@ -403,6 +401,10 @@ textarea,
 .seele-reduce-motion [class*="animate-"] {
   animation: none !important;
 }
+
+body:has(.seele-reduce-motion) {
+  animation: none !important;
+}
 .seele-reduce-motion .shimmer {
   background: rgba(30, 34, 53, 0.55);
   background-size: auto;
@@ -412,6 +414,7 @@ textarea,
 /* OS-level reduced-motion preference — respected by default on first
    launch via the settings initializer, and as a hard fallback. */
 @media (prefers-reduced-motion: reduce) {
+  body,
   .crt-overlay,
   .crt-overlay::after,
   [class*="animate-"] {
