@@ -6,3 +6,6 @@ dist-electron/
 .DS_Store
 # Agent memory + issue docs — local only
 agents-reference/
+AGENTS.md
+# server-manager dev logs
+.server-logs/

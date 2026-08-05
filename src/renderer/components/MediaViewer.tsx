@@ -413,10 +413,12 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
     // only when zoomed past 1×. 1920px decodes fast (~8MB JPEG vs 250MB
     // raw for an 9000px source) and looks crisp at fit-to-screen.
     const VIEWER_PREVIEW_W = 1920;
+    const isGif = /\.gif$/i.test(file.filePath);
+    const isHeic = /\.heic?$/i.test(file.filePath);
     const previewUrl = React.useMemo(() => {
       const base = toMediaUrl(file.filePath);
-      return isVideo ? base : `${base}?w=${VIEWER_PREVIEW_W}`;
-    }, [file.filePath, isVideo]);
+      return isVideo || isGif ? base : `${base}?w=${VIEWER_PREVIEW_W}`;
+    }, [file.filePath, isVideo, isGif]);
     const fullResUrl = React.useMemo(
       () => toMediaUrl(file.filePath),
       [file.filePath],
@@ -435,7 +437,9 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
           const f = files[i];
           if (f.fileType !== "video") {
             const img = new Image();
-            img.src = `${toMediaUrl(f.filePath)}?w=${VIEWER_PREVIEW_W}`;
+            img.src = /\.gif$/i.test(f.filePath)
+              ? toMediaUrl(f.filePath)
+              : `${toMediaUrl(f.filePath)}?w=${VIEWER_PREVIEW_W}`;
           }
         }
       }
@@ -626,7 +630,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                 {/* Full-resolution detail layer — fades in on top when zoomed.
                     Sits invisible until loaded so the preview underneath stays
                     on screen (no flicker). */}
-                {zoom > 1 && (
+                {zoom > 1 && !isHeic && (
                   <img
                     key={`full-${file.filePath}`}
                     src={fullResUrl}

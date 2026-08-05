@@ -20,6 +20,7 @@ import * as mediaCache from "./mediaCache";
 import * as settingsStore from "./settings";
 import type { MediaFile, MetaPatch, ScanProgress } from "../src/scanner/types";
 import { FILE_TYPE_BY_EXT } from "../src/scanner/extensions";
+import { isAnimatedGif, isHeicContent } from "../src/scanner/sniff";
 
 /* ------------------------------------------------------------------ *
  *  Window management
@@ -376,9 +377,52 @@ async function findFfmpeg(): Promise<string | null> {
   return promise;
 }
 
-/** Extract a single frame from a video at ~1s and resize it with sharp.
- *  Cached in the two-tier thumbnail cache (RAM LRU + disk). Returns a
- *  JPEG Response or null if ffmpeg/sharp fails. */
+/** Extract a single frame at ~1s from any ffmpeg-decodable input and
+ *  scale it to width `w`. Runs inside the ffmpeg concurrency gate with an
+ *  8s timeout; tmp file is always cleaned up. Returns a JPEG Buffer or
+ *  null on failure.
+ *  HEIC stills are tiled HEVC grids — ffmpeg rejects both `-ss` and `-vf
+ *  scale` on them ("simple and complex filtering cannot be used
+ *  together"), so pass `{ heic: true }` to extract the full-res frame
+ *  unscaled and let the caller downscale with sharp. */
+async function extractFrameWithFfmpeg(
+  input: string,
+  w: number,
+  opts: { heic?: boolean } = {},
+): Promise<Buffer | null> {
+  const ff = await findFfmpeg();
+  if (!ff) return null;
+  const tmpFile = path.join(tmpdir(), `seele-thumb-${randomBytes(6).toString("hex")}.jpg`);
+  try {
+    // Extract frame inside the concurrency gate so a grid of 50 videos
+    // doesn't spawn 50 ffmpeg processes at once.
+    await withFfmpegLimit(async () => {
+      const { promise, resolve, reject } = Promise.withResolvers<void>();
+      const args = opts.heic
+        ? ["-i", input, "-frames:v", "1", "-q:v", "3", "-update", "1", "-y", tmpFile]
+        : ["-ss", "1", "-i", input, "-frames:v", "1",
+           "-vf", `scale=${w}:-2`, "-q:v", "3", "-update", "1", "-y", tmpFile];
+      const proc = execFile(
+        ff,
+        args,
+        { timeout: 8000, windowsHide: true },
+        (err) => { if (err) reject(err); else resolve(); },
+      );
+      proc.on("error", reject);
+      await promise;
+    });
+    return await fs.promises.readFile(tmpFile);
+  } catch (e) {
+    if (!app.isPackaged) console.debug("[media] ffmpeg frame extraction failed:", e);
+    return null;
+  } finally {
+    fs.promises.unlink(tmpFile).catch(() => {});
+  }
+}
+
+/** Extract a single frame from a video at ~1s and resize it. Cached in
+ *  the two-tier thumbnail cache (RAM LRU + disk). Returns a JPEG Response
+ *  or null if ffmpeg fails. */
 async function serveVideoThumb(
   requested: string,
   w: number,
@@ -390,36 +434,13 @@ async function serveVideoThumb(
       headers: { "Content-Type": sniffThumbType(cached), "Cache-Control": "public, max-age=86400" },
     });
   }
-  const ff = await findFfmpeg();
-  if (!ff) return null;
-  const tmpFile = path.join(tmpdir(), `seele-thumb-${randomBytes(6).toString("hex")}.jpg`);
-  try {
-    // Extract frame inside the concurrency gate so a grid of 50 videos
-    // doesn't spawn 50 ffmpeg processes at once.
-    await withFfmpegLimit(async () => {
-      const { promise, resolve, reject } = Promise.withResolvers<void>();
-      const proc = execFile(
-        ff,
-        ["-ss", "1", "-i", requested, "-frames:v", "1",
-         "-vf", `scale=${w}:-2`, "-q:v", "3", "-update", "1", "-y", tmpFile],
-        { timeout: 8000, windowsHide: true },
-        (err) => { if (err) reject(err); else resolve(); },
-      );
-      proc.on("error", reject);
-      await promise;
-    });
-    const buf = await fs.promises.readFile(tmpFile);
-    const bytes = new Uint8Array(buf);
-    storeThumb(cacheKey, bytes);
-    return new Response(bytes as unknown as BodyInit, {
-      headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
-    });
-  } catch (e) {
-    if (!app.isPackaged) console.debug("[media] video thumb failed:", e);
-    return null;
-  } finally {
-    fs.promises.unlink(tmpFile).catch(() => {});
-  }
+  const buf = await extractFrameWithFfmpeg(requested, w);
+  if (!buf) return null;
+  const bytes = new Uint8Array(buf);
+  storeThumb(cacheKey, bytes);
+  return new Response(bytes as unknown as BodyInit, {
+    headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
+  });
 }
 
 
@@ -434,6 +455,59 @@ async function serveResized(
   requested: string,
   w: number,
 ): Promise<Response | null> {
+  // Read the file header once, up front, so the animated-GIF decision and
+  // the HEIC-inside-catch fallback reuse the same bytes instead of
+  // re-opening the file. Best-effort: on error we just skip sniffing.
+  let header: Uint8Array | null = null;
+  try {
+    const fh = await fs.promises.open(requested, "r");
+    try {
+      const buf = Buffer.alloc(1024);
+      const { bytesRead } = await fh.read(buf, 0, 1024, 0);
+      header = new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
+    } finally {
+      await fh.close().catch(() => {});
+    }
+  } catch {
+    header = null;
+  }
+  const isAnimGif = header !== null && isAnimatedGif(header);
+
+  // Animated GIFs: serve a resized animated GIF (sharp with `animated`)
+  // so grid tiles animate too, not just the fullscreen viewer. They use
+  // their own cache key and MUST NOT consult the plain `?w=` tier first —
+  // that tier can hold a stale static first-frame (written before animated
+  // thumbs existed, or by the static fallback below) which would otherwise
+  // shadow the animated version forever. If the animated render fails,
+  // fall through to the static first-frame path.
+  if (isAnimGif) {
+    const animKey = `${requested}?w=${w}&gifanim=1`;
+    const animCached = await lookupThumb(animKey);
+    if (animCached) {
+      return new Response(animCached as unknown as BodyInit, {
+        headers: {
+          "Content-Type": "image/gif",
+          "Cache-Control": "public, max-age=86400",
+        },
+      });
+    }
+    try {
+      const bytes = await withSharpLimit(() =>
+        sharp(requested, { animated: true, pages: -1 })
+          .resize({ width: w, withoutEnlargement: true })
+          .gif()
+          .toBuffer(),
+      );
+      const out = new Uint8Array(bytes);
+      storeThumb(animKey, out);
+      return new Response(out as unknown as BodyInit, {
+        headers: { "Content-Type": "image/gif", "Cache-Control": "public, max-age=86400" },
+      });
+    } catch (e) {
+      if (!app.isPackaged) console.debug("[media] animated gif resized failed:", e);
+    }
+  }
+
   const cacheKey = `${requested}?w=${w}`;
   const cached = await lookupThumb(cacheKey);
   if (cached) {
@@ -474,6 +548,27 @@ async function serveResized(
   } catch (e) {
     // Unsupported format / corrupt file → fall back to raw stream.
     if (!app.isPackaged) console.debug("[media] resize failed:", e);
+    // HEIC/HEIF content (by magic, not extension — a .jpg file can carry
+    // HEIC bytes) may fail sharp/libheif; retry via ffmpeg frame extract.
+    if (header && isHeicContent(header)) {
+      // HEIC stills are tiled HEVC grids: ffmpeg rejects -ss/-vf scale,
+      // so extract the full-res frame and downscale with sharp.
+      const buf = await extractFrameWithFfmpeg(requested, w, { heic: true });
+      if (buf) {
+        const bytes = await withSharpLimit(() =>
+          sharp(buf)
+            .rotate()
+            .resize({ width: w, withoutEnlargement: true })
+            .jpeg({ quality: 80, mozjpeg: true })
+            .toBuffer(),
+        );
+        const out = new Uint8Array(bytes);
+        storeThumb(`${requested}?w=${w}&heic=1`, out);
+        return new Response(out as unknown as BodyInit, {
+          headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
+        });
+      }
+    }
     return null;
   }
 }
@@ -894,33 +989,40 @@ async function decodeBufferForInsights(
       const meta = await sharp(preview).metadata();
       return { buf: preview, meta };
     } catch {
+      // HEIC/HEIF may fail sharp/libheif — retry via ffmpeg frame extract.
+      const fh = await fs.promises.open(filePath, "r");
+      try {
+        const header = Buffer.alloc(1024);
+        const { bytesRead } = await fh.read(header, 0, 1024, 0);
+        if (isHeicContent(new Uint8Array(header.buffer, header.byteOffset, bytesRead))) {
+          const buf = await extractFrameWithFfmpeg(filePath, 320, { heic: true });
+          if (buf) {
+            const preview = await withSharpLimit(() =>
+              sharp(buf)
+                .resize({ width: 320, withoutEnlargement: true })
+                .jpeg({ quality: 80 })
+                .toBuffer(),
+            );
+            const meta = await sharp(preview).metadata();
+            return { buf: preview, meta };
+          }
+        }
+      } catch {
+        // fall through
+      } finally {
+        await fh.close().catch(() => {});
+      }
       return null;
     }
   }
   // Video: extract one frame at ~1s into a JPEG buffer.
-  const ff = await findFfmpeg();
-  if (!ff) return null;
-  const tmpFile = path.join(tmpdir(), `seele-insight-${randomBytes(6).toString("hex")}.jpg`);
+  const buf = await extractFrameWithFfmpeg(filePath, 320);
+  if (!buf) return null;
   try {
-    await withFfmpegLimit(() =>
-      new Promise<void>((resolve, reject) => {
-        const proc = execFile(
-          ff,
-          ["-ss", "1", "-i", filePath, "-frames:v", "1",
-           "-vf", "scale=320:-2", "-q:v", "3", "-update", "1", "-y", tmpFile],
-          { timeout: 8000, windowsHide: true },
-          (err) => { if (err) reject(err); else resolve(); },
-        );
-        proc.on("error", reject);
-      }),
-    );
-    const buf = await fs.promises.readFile(tmpFile);
     const meta = await sharp(buf).metadata();
     return { buf, meta };
   } catch {
     return null;
-  } finally {
-    fs.promises.unlink(tmpFile).catch(() => {});
   }
 }
 
