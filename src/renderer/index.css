@@ -111,20 +111,93 @@ textarea,
 }
 
 /* =========================================================================
- *  CRT scanline overlay (§2.4) — subtle repeating gradient
+ *  CRT screen overlay (§2.4) — layered phosphor tube effect.
+ *
+ *  Static layers (single-pass backgrounds, no repaint):
+ *    1. scanline mask   — every other line slightly darkened
+ *    2. aperture grille — faint RGB phosphor micro-stripes
+ *    3. vignette        — darkening toward the tube edges (fake curvature)
+ *  Animated layers (compositor-only, both killed by the reduce-motion
+ *  rules below):
+ *    4. ::after         — rolling refresh band (transform translateY)
+ *    5. element flicker — near-imperceptible phosphor dips (opacity)
  * ========================================================================= */
 .crt-overlay {
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 9999;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent 0px,
-    transparent 2px,
-    rgba(0, 0, 0, 0.12) 2px,
-    rgba(0, 0, 0, 0.12) 3px
+  background:
+    radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.16) 100%),
+    repeating-linear-gradient(
+      to right,
+      rgba(255, 60, 60, 0.025) 0 1px,
+      rgba(60, 255, 60, 0.025) 1px 2px,
+      rgba(60, 60, 255, 0.025) 2px 3px,
+      transparent 3px 6px
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0 2px,
+      rgba(0, 0, 0, 0.13) 2px 3px
+    );
+  animation: crt-flicker 5s linear infinite;
+}
+
+/* Rolling refresh band — the classic CRT roll. */
+.crt-overlay::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 90px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(200, 220, 255, 0.05) 45%,
+    rgba(200, 220, 255, 0.075) 50%,
+    rgba(200, 220, 255, 0.05) 55%,
+    transparent
   );
+  animation: crt-roll 7s linear infinite;
+}
+
+/* Two brief brightness dips per cycle — reads as phosphor instability
+   rather than a breathing glow. */
+@keyframes crt-flicker {
+  0% {
+    opacity: 1;
+  }
+  47% {
+    opacity: 1;
+  }
+  49% {
+    opacity: 0.96;
+  }
+  51% {
+    opacity: 1;
+  }
+  76% {
+    opacity: 1;
+  }
+  78% {
+    opacity: 0.98;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes crt-roll {
+  0% {
+    transform: translateY(-90px);
+  }
+  100% {
+    transform: translateY(100vh);
+  }
 }
 
 /* =========================================================================
@@ -334,6 +407,7 @@ textarea,
 /* Reduce Motion: kill the always-on decorative animations (full-viewport
    scanline + glow/pulse) and switch the shimmer to the opacity pulse. */
 .seele-reduce-motion .crt-overlay,
+.seele-reduce-motion .crt-overlay::after,
 .seele-reduce-motion [class*="animate-"] {
   animation: none !important;
 }
@@ -347,6 +421,7 @@ textarea,
    launch via the settings initializer, and as a hard fallback. */
 @media (prefers-reduced-motion: reduce) {
   .crt-overlay,
+  .crt-overlay::after,
   [class*="animate-"] {
     animation: none !important;
   }
