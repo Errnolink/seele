@@ -380,7 +380,13 @@ const SubfolderCard = memo(function SubfolderCard({
         <div>
           <div className="grid grid-cols-4 gap-1.5 h-14 mb-2">
             {samples.map((n) => {
-              const kind = classifyFile(n) === "vid" ? "VID" : classifyFile(n) === "raw" ? "RAW" : "IMG";
+              const kind = /\.gif$/i.test(n.filePath)
+                ? "GIF"
+                : classifyFile(n) === "vid"
+                  ? "VID"
+                  : classifyFile(n) === "raw"
+                    ? "RAW"
+                    : "IMG";
               return (
                 <div
                   key={n.filePath}

@@ -134,6 +134,7 @@ const MediaCard = memo(function MediaCard({
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const isVideo = file.fileType === "video";
+  const isGif = /\.gif$/i.test(file.filePath);
   // Formats that may carry an alpha channel (PNG/GIF/WebP/SVG). Triggers
   // a checkerboard backdrop so transparency is visible — invisible for
   // fully-opaque images since the <img> (z-1) covers the ::before (z-0).
@@ -305,6 +306,8 @@ const MediaCard = memo(function MediaCard({
           <span className="ml-auto shrink-0">
             {isVideo ? (
               <span className="text-nerv-green">VID</span>
+            ) : isGif ? (
+              <span className="tag-chip px-1 py-0.5 bg-nerv-amber text-black text-[8px] font-bold tracking-wider">GIF</span>
             ) : (
               <span className="text-nerv-cyan">IMG</span>
             )}
@@ -1191,6 +1194,10 @@ const ListView = memo(function ListView({
                 <span className="tag-chip px-1 py-0.5 bg-nerv-green/20 border border-nerv-green/50 text-nerv-green text-[9px] font-bold">
                   VID
                 </span>
+              ) : /\.gif$/i.test(file.filePath) ? (
+                <span className="tag-chip px-1 py-0.5 bg-nerv-amber/90 border border-nerv-amber text-black text-[9px] font-bold">
+                  GIF
+                </span>
               ) : (
                 <span className="tag-chip px-1 py-0.5 bg-nerv-cyan/20 border border-nerv-cyan/50 text-nerv-cyan text-[9px] font-bold">
                   IMG
@@ -1353,7 +1360,9 @@ const InspectorCard = memo(function InspectorCard({
           {/* B. Media preview card */}
           <div className="aspect-video w-full bg-nerv-bg overflow-hidden border border-nerv-border flex items-center justify-center relative">
             <img
-              src={window.scanAPI.toMediaUrl(file.filePath)}
+              src={file.fileType === "video"
+                ? window.scanAPI.toMediaUrl(file.filePath)
+                : `${window.scanAPI.toMediaUrl(file.filePath)}?w=640`}
               alt={file.fileName}
               loading="lazy"
               className="w-full h-full object-contain"
@@ -1366,6 +1375,8 @@ const InspectorCard = memo(function InspectorCard({
               </span>
               {file.fileType === "video" ? (
                 <span className="tag-chip eva-cut bg-nerv-green text-black text-[8px] font-bold tracking-wider px-1.5 py-0.5">VID</span>
+              ) : /\.gif$/i.test(file.filePath) ? (
+                <span className="tag-chip eva-cut bg-nerv-amber text-black text-[8px] font-bold tracking-wider px-1.5 py-0.5">GIF</span>
               ) : (
                 <span className="tag-chip eva-cut bg-nerv-cyan text-black text-[8px] font-bold tracking-wider px-1.5 py-0.5">IMG</span>
               )}
