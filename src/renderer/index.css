@@ -111,18 +111,10 @@ textarea,
 }
 
 /* =========================================================================
- *  NERV CRT effects (§2.4) — canonical NERV Operations Console look.
- *  Every screen carries: scanlines, edge vignette, phosphor flicker, and
- *  a moving scan line — atmosphere that never compromises readability
- *  (scanline opacity capped at ~4-6%, per the nerv-ui CRT spec).
- *
- *  Static layers on .crt-overlay (single-pass backgrounds, no repaint):
- *    1. scanline mask — 4% black, 4px period
- *    2. edge vignette — tube-edge darkening (fake curvature)
- *  Animated (compositor-only):
- *    3. .crt-overlay::after — 2px phosphor-green moving scan line
- *    4. body — phosphor flicker (whole-screen brightness dip)
- *  All four are killed by the reduce-motion rules below.
+ *  CRT scanline overlay (§2.4) — minimal static atmosphere.
+ *  Two single-pass backgrounds (no repaint, no animation):
+ *    1. scanline mask — 2% black, 4px period
+ *    2. edge vignette — faint tube-edge darkening
  * ========================================================================= */
 .crt-overlay {
   position: fixed;
@@ -134,60 +126,14 @@ textarea,
       0deg,
       transparent,
       transparent 2px,
-      rgba(0, 0, 0, 0.04) 2px,
-      rgba(0, 0, 0, 0.04) 4px
+      rgba(0, 0, 0, 0.02) 2px,
+      rgba(0, 0, 0, 0.02) 4px
     ),
     radial-gradient(
       ellipse 70% 70% at center,
       transparent 50%,
-      rgba(0, 0, 0, 0.4) 100%
+      rgba(0, 0, 0, 0.12) 100%
     );
-}
-
-/* Moving scan line — a thin phosphor-green line sweeping down the tube. */
-.crt-overlay::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(80, 255, 80, 0.15) 20%,
-    rgba(80, 255, 80, 0.3) 50%,
-    rgba(80, 255, 80, 0.15) 80%,
-    transparent 100%
-  );
-  opacity: 0.5;
-  animation: scan-line 4s linear infinite;
-}
-
-/* Whole-screen phosphor flicker — one brief brightness dip per cycle. */
-body {
-  animation: phosphor-flicker 4s ease-in-out infinite;
-}
-
-@keyframes phosphor-flicker {
-  0%,
-  92%,
-  94%,
-  100% {
-    opacity: 1;
-  }
-  93% {
-    opacity: 0.96;
-  }
-}
-
-@keyframes scan-line {
-  0% {
-    transform: translateY(-100%);
-  }
-  100% {
-    transform: translateY(100vh);
-  }
 }
 
 /* =========================================================================
@@ -396,13 +342,7 @@ body {
 
 /* Reduce Motion: kill the always-on decorative animations (full-viewport
    scanline + glow/pulse) and switch the shimmer to the opacity pulse. */
-.seele-reduce-motion .crt-overlay,
-.seele-reduce-motion .crt-overlay::after,
 .seele-reduce-motion [class*="animate-"] {
-  animation: none !important;
-}
-
-body:has(.seele-reduce-motion) {
   animation: none !important;
 }
 .seele-reduce-motion .shimmer {
@@ -414,9 +354,6 @@ body:has(.seele-reduce-motion) {
 /* OS-level reduced-motion preference — respected by default on first
    launch via the settings initializer, and as a hard fallback. */
 @media (prefers-reduced-motion: reduce) {
-  body,
-  .crt-overlay,
-  .crt-overlay::after,
   [class*="animate-"] {
     animation: none !important;
   }
