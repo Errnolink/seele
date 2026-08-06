@@ -153,8 +153,8 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
     const [isPanning, setIsPanning] = useState(false);
     const [fullResLoaded, setFullResLoaded] = useState(false);
     const [previewLoaded, setPreviewLoaded] = useState(false);
-    // The file this viewer instance opened with — shared-element morphs
-    // (layoutId) only apply to it, so ←/→ navigation stays instant.
+    // The file this viewer instance opened with — the opening scale pop
+    // only applies to it, so ←/→ navigation stays instant.
     const openFilePathRef = useRef(file.filePath);
     const panStart = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
 
@@ -529,14 +529,13 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
           ? "cursor-grabbing"
           : "cursor-grab"
         : "cursor-zoom-in";
-    // Per-value transitions: the shared-element morph eases out quickly
-    // (spring 360/28 ≈ 0.3s) while pan/zoom stays snappy (600/45 ≈ 0.2s),
-    // and everything goes zero-duration during an active drag so the image
-    // tracks the cursor 1:1.
+    // Per-value transitions: pan/zoom stays snappy (600/45 ≈ 0.2s), the
+    // opening scale pop and layer fades use quick tweens, and everything
+    // goes zero-duration during an active drag so the image tracks the
+    // cursor 1:1.
     const imageTransition = isPanning
       ? { duration: 0 }
       : {
-          layout: { type: "spring", stiffness: 360, damping: 28 },
           x: { type: "spring", stiffness: 600, damping: 45 },
           y: { type: "spring", stiffness: 600, damping: 45 },
           scale: { type: "spring", stiffness: 600, damping: 45 },
@@ -546,9 +545,8 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
     return (
       <motion.div
         initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.2 }}
+        animate={{ opacity: 1, transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] } }}
+        exit={{ opacity: 0, transition: { duration: 0.12, ease: [0.16, 1, 0.3, 1] } }}
         className="fixed inset-0 z-50 flex flex-col bg-nerv-bg select-none"
         tabIndex={-1}
       >
@@ -641,37 +639,28 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
               />
             ) : (
               <div className="relative thumb-checkerboard" style={{ maxWidth: "82vw", maxHeight: "78vh" }}>
-                {/* Shared-element projection wrapper — morphs from the
-                    clicked tile into the viewer box on open and back on
-                    close. Transforms live on the inner img, never here:
-                    projection and pan/zoom compose on separate elements,
-                    so zooming can't ghost into two images. Disabled once
-                    zoomed/navigated away, where close is a clean fade. */}
-                <motion.div
-                  layoutId={zoom === 1 && file.filePath === openFilePathRef.current ? file.filePath : undefined}
-                  className="relative w-fit"
-                  transition={{ layout: { type: "spring", stiffness: 360, damping: 28 } }}
-                  exit={{ opacity: 0, transition: { duration: 0.25 } }}
-                  style={{ willChange: "transform" }}
-                >
-                  {/* Thumbnail layer — always visible; the morphing content. */}
-                  <motion.img
-                    key={`thumb-${file.filePath}`}
-                    src={thumbUrl}
-                    alt={file.fileName}
-                    decoding="async"
-                    draggable={false}
-                    onClick={handleImageClick}
-                    onMouseDown={handleMouseDown}
-                    className={`max-h-[78vh] max-w-[82vw] ${cursorClass}`}
-                    animate={{ scale: zoom, x: pan.x, y: pan.y }}
-                    transition={imageTransition}
-                    style={{
-                      transformOrigin: "center",
-                      willChange: zoom > 1 ? "transform" : "auto",
-                    }}
-                  />
-                </motion.div>
+                {/* Base layer — the ?w=640 thumbnail, always visible so
+                    opening never blanks. A subtle scale pop on open (only
+                    for the file the viewer was opened with; ←/→ navigation
+                    swaps instantly), then pure pan/zoom transforms — no
+                    shared-layout projection anywhere, so zoom can't ghost. */}
+                <motion.img
+                  key={`thumb-${file.filePath}`}
+                  src={thumbUrl}
+                  alt={file.fileName}
+                  decoding="async"
+                  draggable={false}
+                  onClick={handleImageClick}
+                  onMouseDown={handleMouseDown}
+                  initial={file.filePath === openFilePathRef.current ? { scale: 0.97 } : false}
+                  animate={{ scale: zoom, x: pan.x, y: pan.y, opacity: 1 }}
+                  transition={imageTransition}
+                  className={`max-h-[78vh] max-w-[82vw] ${cursorClass}`}
+                  style={{
+                    transformOrigin: "center",
+                    willChange: zoom > 1 ? "transform" : "auto",
+                  }}
+                />
                 {/* Sharpen sweep — shimmer across the thumbnail while the
                     1920px preview decodes (GIFs stream raw, already crisp). */}
                 {!previewLoaded && !isGif && (
@@ -688,7 +677,6 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                   onClick={handleImageClick}
                   onMouseDown={handleMouseDown}
                   onLoad={() => setPreviewLoaded(true)}
-                  exit={{ opacity: 0, transition: { duration: 0.25 } }}
                   className={`absolute inset-0 max-h-[78vh] max-w-[82vw] ${cursorClass}`}
                   animate={{ scale: zoom, x: pan.x, y: pan.y, opacity: previewLoaded ? 1 : 0 }}
                   transition={imageTransition}
@@ -710,7 +698,6 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                     onClick={handleImageClick}
                     onMouseDown={handleMouseDown}
                     onLoad={() => setFullResLoaded(true)}
-                    exit={{ opacity: 0, transition: { duration: 0.25 } }}
                     className={`absolute inset-0 max-h-[78vh] max-w-[82vw] ${cursorClass}`}
                     animate={{ scale: zoom, x: pan.x, y: pan.y, opacity: fullResLoaded ? 1 : 0 }}
                     transition={imageTransition}

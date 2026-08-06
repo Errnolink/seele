@@ -21,7 +21,6 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { motion } from "motion/react";
 import type { GroupMode, MediaFile, ViewMode } from "../types";
 import { formatBytes, formatDate } from "../utils";
 import type { TagDef } from "../hooks/useTags";
@@ -213,13 +212,7 @@ const MediaCard = memo(function MediaCard({
             <div className="shimmer absolute inset-0" aria-hidden="true" />
           )}
 
-          {/* motion.img — layoutId binds this thumbnail to the viewer's
-              shared-element layer, so opening morphs the tile into the
-              viewer box and closing morphs it back. Hover scale and the
-              load fade run through motion (no CSS transform transitions,
-              which would fight the layout projection). */}
-          <motion.img
-            layoutId={file.filePath}
+          <img
             src={url}
             alt={file.fileName}
             loading="lazy"
@@ -234,10 +227,10 @@ const MediaCard = memo(function MediaCard({
               }
             }}
             onError={() => setError(true)}
-            className={["w-full h-full object-cover", loaded ? "opacity-100" : "opacity-0"].join(" ")}
-            animate={{ opacity: loaded ? 1 : 0 }}
-            transition={{ duration: 0.3 }}
-            whileHover={{ scale: 1.05 }}
+            className={[
+              "w-full h-full object-cover transition-[transform,opacity] duration-300 group-hover:scale-105",
+              loaded ? "opacity-100" : "opacity-0",
+            ].join(" ")}
             draggable={false}
           />
         </>
