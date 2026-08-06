@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { motion } from "motion/react";
 
 export interface ShortcutEntry {
   keys: string[];
@@ -57,11 +58,19 @@ export const KeyboardHelp: React.FC<KeyboardHelpProps> = ({ onClose }) => {
   }, [onClose]);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-nerv-bg/80 backdrop-blur-sm animate-fade-in"
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-nerv-bg/80 backdrop-blur-sm"
       onClick={onClose}
     >
-      <div
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 10 }}
+        transition={{ duration: 0.2 }}
         className="relative w-[420px] bg-nerv-panel border border-nerv-border bg-opacity-90 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -116,8 +125,8 @@ export const KeyboardHelp: React.FC<KeyboardHelpProps> = ({ onClose }) => {
         <div className="px-4 py-2 border-t border-nerv-border/40 text-[10px] text-nerv-muted/60 text-center">
           Press <span className="text-nerv-orange">Esc</span> to close
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };
 

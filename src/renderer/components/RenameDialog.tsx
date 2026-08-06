@@ -6,6 +6,7 @@
  * name is empty or unchanged. Calls back with the trimmed new name.
  */
 import { useEffect, useRef, useState } from "react";
+import { motion } from "motion/react";
 import type { MediaFile } from "../types";
 
 interface RenameDialogProps {
@@ -59,13 +60,23 @@ export function RenameDialog({ file, onClose, onConfirm }: RenameDialogProps) {
   };
 
   return (
-    <div
-      className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fade-in"
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
+      className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-md p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-md border-2 border-nerv-amber bg-nerv-panel eva-cut shadow-[0_0_30px_rgba(255,183,0,0.35)]">
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 10 }}
+        transition={{ duration: 0.2 }}
+        className="w-full max-w-md border-2 border-nerv-amber bg-nerv-panel eva-cut shadow-[0_0_30px_rgba(255,183,0,0.35)]"
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-nerv-border pb-3 p-4">
           <div className="flex items-center gap-2">
@@ -139,8 +150,8 @@ export function RenameDialog({ file, onClose, onConfirm }: RenameDialogProps) {
             <span>SAVE RENAME</span>
           </button>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 

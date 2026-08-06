@@ -19,6 +19,7 @@
  *  - Scroll Buffer — the masonry overscan band.
  */
 import { useEffect, type ReactNode } from "react";
+import { motion } from "motion/react";
 import type { AppSettings } from "../../../electron/settings";
 
 export interface SettingsModalProps {
@@ -153,11 +154,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const level = scrollLevelOf(settings.overscan);
 
   return (
-    <div
-      className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in"
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
+      className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
       onClick={onClose}
     >
-      <div
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 10 }}
+        transition={{ duration: 0.2 }}
         className="relative w-full max-w-2xl border border-nerv-orange/60 bg-nerv-panel shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -298,8 +307,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             RESET DEFAULTS
           </button>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };
 

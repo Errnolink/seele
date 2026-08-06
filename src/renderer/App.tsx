@@ -1,4 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
 import { MasonryGrid } from "./components/MasonryGrid";
@@ -1048,8 +1049,9 @@ export default function App() {
   const showIdleState = scan.status === "idle" && scan.count === 0;
 
   return (
-    <div
-      className={`h-screen w-screen flex flex-col bg-nerv-bg text-nerv-text overflow-hidden relative font-mono select-none ${
+    <MotionConfig reducedMotion={settings.reduceMotion ? "always" : "user"}>
+      <div
+        className={`h-screen w-screen flex flex-col bg-nerv-bg text-nerv-text overflow-hidden relative font-mono select-none ${
         settings.reduceMotion ? "seele-reduce-motion" : ""
       } ${settings.dialogBlur ? "" : "seele-no-blur"}`}
       onDragEnter={(e) => {
@@ -1235,7 +1237,7 @@ export default function App() {
         />
 
         {/* Main content */}
-        <main className="flex-1 min-w-0 h-full relative overflow-hidden bg-nerv-bg">
+        <motion.main layout className="flex-1 min-w-0 h-full relative overflow-hidden bg-nerv-bg">
           {showIdleState ? (
             <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-5 p-8 text-center animate-fade-in">
               <svg
@@ -1328,7 +1330,7 @@ export default function App() {
               onToggleFileTag={tagSystem.toggleFileTag}
             />
           )}
-        </main>
+        </motion.main>
       </div>
       {/* Footer status telemetry bar (v2.5 §1b) */}
       {scan.status !== "idle" && (
@@ -1626,17 +1628,18 @@ export default function App() {
       )}
 
       {/* Lightbox */}
-      {viewerIndex !== null && derivedFiles[viewerIndex] && (
-        <MediaViewer
-          file={derivedFiles[viewerIndex]}
-          files={derivedFiles}
-          index={viewerIndex}
-          onClose={() => {
-            setViewerIndex(null);
-            viewerFilePathRef.current = null;
-          }}
-          onNavigate={navigateViewer}
-          onNavigateTo={(i) => {
+      <AnimatePresence>
+        {viewerIndex !== null && derivedFiles[viewerIndex] && (
+          <MediaViewer
+            file={derivedFiles[viewerIndex]}
+            files={derivedFiles}
+            index={viewerIndex}
+            onClose={() => {
+              setViewerIndex(null);
+              viewerFilePathRef.current = null;
+            }}
+            onNavigate={navigateViewer}
+            onNavigateTo={(i) => {
             if (derivedFiles[i]) {
               viewerFilePathRef.current = derivedFiles[i].filePath;
               setViewerIndex(i);
@@ -1658,7 +1661,8 @@ export default function App() {
           }
           onToggleFileTag={tagSystem.toggleFileTag}
         />
-      )}
+        )}
+      </AnimatePresence>
 
       {moveDialogPaths && folderTree && (
         <MoveDialog
@@ -1709,41 +1713,43 @@ export default function App() {
       )}
 
       {/* Overlays */}
-      {showHelp && <KeyboardHelp onClose={() => setShowHelp(false)} />}
-      {showPalette && (
-        <CommandPalette
-          files={derivedFiles}
-          onClose={() => setShowPalette(false)}
-          onSelect={(f) => {
-            setShowPalette(false);
-            openViewer(f);
-          }}
-        />
-      )}
-      {showAnalytics && (
-        <AnalyticsModal
-          files={files}
-          onClose={() => setShowAnalytics(false)}
-          onOpenMedia={(f) => {
-            setShowAnalytics(false);
-            openViewer(f);
-          }}
-        />
-      )}
+      <AnimatePresence>{showHelp && <KeyboardHelp onClose={() => setShowHelp(false)} />}</AnimatePresence>
+      <AnimatePresence>
+        {showPalette && (
+          <CommandPalette
+            files={derivedFiles}
+            onClose={() => setShowPalette(false)}
+            onSelect={(f) => {
+              setShowPalette(false);
+              openViewer(f);
+            }}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showAnalytics && (
+          <AnalyticsModal
+            files={files}
+            onClose={() => setShowAnalytics(false)}
+            onOpenMedia={(f) => {
+              setShowAnalytics(false);
+              openViewer(f);
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Session Audit Trail Modal — v2.5 §Module 7 */}
-      {showSessionLog && (
-        <SessionChangesModal
-          open={showSessionLog}
-          entries={activityLog}
-          onClose={() => setShowSessionLog(false)}
-          onClear={() => {
-            setActivityLog([]);
-            setShowSessionLog(false);
-          }}
-          onRevert={revertEntry}
-        />
-      )}
+      <SessionChangesModal
+        open={showSessionLog}
+        entries={activityLog}
+        onClose={() => setShowSessionLog(false)}
+        onClear={() => {
+          setActivityLog([]);
+          setShowSessionLog(false);
+        }}
+        onRevert={revertEntry}
+      />
 
       {/* Trash Queue badge + modal (ui-upgrade.md Issue 1) */}
       {trashQueue.size > 0 && (
@@ -1769,13 +1775,16 @@ export default function App() {
       />
 
       {/* Settings — performance & accessibility knobs (issues.md item 6) */}
-      {showSettings && (
-        <SettingsModal
-          settings={settings}
-          onChange={updateSettings}
-          onClose={() => setShowSettings(false)}
-        />
-      )}
-    </div>
+      <AnimatePresence>
+        {showSettings && (
+          <SettingsModal
+            settings={settings}
+            onChange={updateSettings}
+            onClose={() => setShowSettings(false)}
+          />
+        )}
+      </AnimatePresence>
+      </div>
+    </MotionConfig>
   );
 }

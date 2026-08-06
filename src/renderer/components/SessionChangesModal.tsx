@@ -9,6 +9,7 @@
  * "undo" means per action type (e.g. move-back, restore from trash).
  */
 import { memo, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import type { ActivityEntry } from "./ActivityLog";
 
 export interface SessionChangesModalProps {
@@ -84,17 +85,25 @@ export const SessionChangesModal: React.FC<SessionChangesModalProps> = memo(
       URL.revokeObjectURL(url);
     };
 
-    if (!open) return null;
-
     return (
-      <div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in"
-        onClick={onClose}
-      >
-        <div
-          className="w-[900px] max-h-[80vh] flex flex-col bg-nerv-panel border border-nerv-orange/50 shadow-[0_0_40px_rgba(0,0,0,0.8)]"
-          onClick={(e) => e.stopPropagation()}
-        >
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+            onClick={onClose}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }}
+              transition={{ duration: 0.2 }}
+              className="w-[900px] max-h-[80vh] flex flex-col bg-nerv-panel border border-nerv-orange/50 shadow-[0_0_40px_rgba(0,0,0,0.8)]"
+              onClick={(e) => e.stopPropagation()}
+            >
           {/* Header */}
           <div className="flex items-center justify-between px-5 py-3 border-b border-nerv-border">
             <div className="flex items-center gap-3">
@@ -240,8 +249,10 @@ export const SessionChangesModal: React.FC<SessionChangesModalProps> = memo(
               </button>
             </div>
           </div>
-        </div>
-      </div>
+        </motion.div>
+      </motion.div>
+        )}
+      </AnimatePresence>
     );
   },
 );

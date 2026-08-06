@@ -8,6 +8,7 @@
  * it, so the user can see the effect before committing.
  */
 import { useEffect, useState } from "react";
+import { motion } from "motion/react";
 import type { TagDef } from "../hooks/useTags";
 
 interface BatchTagDialogProps {
@@ -63,13 +64,23 @@ export function BatchTagDialog({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fade-in"
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
+      className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-md p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-lg border-2 border-nerv-lime bg-nerv-panel eva-cut shadow-[0_0_30px_rgba(201,233,138,0.3)]">
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 10 }}
+        transition={{ duration: 0.2 }}
+        className="w-full max-w-lg border-2 border-nerv-lime bg-nerv-panel eva-cut shadow-[0_0_30px_rgba(201,233,138,0.3)]"
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-nerv-border p-4">
           <div className="flex items-center gap-2">
@@ -163,8 +174,8 @@ export function BatchTagDialog({
             DONE
           </button>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 

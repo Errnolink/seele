@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from "react";
+import { motion } from "motion/react";
 import type { MediaFile } from "../../scanner/types";
 import { formatBytes } from "../utils";
 
@@ -61,11 +62,19 @@ export default function AnalyticsModal({ files, onClose, onOpenMedia }: Analytic
   }, [onClose]);
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
       onClick={onClose}
     >
-      <div
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 10 }}
+        transition={{ duration: 0.2 }}
         className="max-w-3xl w-full bg-nerv-panel border border-nerv-orange/50 rounded-lg shadow-2xl p-6 flex flex-col gap-6"
         onClick={(e) => e.stopPropagation()}
       >
@@ -160,8 +169,8 @@ export default function AnalyticsModal({ files, onClose, onOpenMedia }: Analytic
             )}
           </div>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
