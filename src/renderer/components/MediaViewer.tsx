@@ -637,10 +637,10 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
               />
             ) : (
               <div className="relative thumb-checkerboard" style={{ maxWidth: "82vw", maxHeight: "78vh" }}>
-                {/* Base layer — the ?w=640 thumbnail, always visible so
-                    opening never blanks. Pure pan/zoom transforms only
-                    (no shared-layout projection, no enter scale — a
-                    full-screen takeover reads cleanest as a fast fade). */}
+                {/* Placeholder layer — the ?w=640 thumbnail, absolute over
+                    the checkerboard, visible until the 1920px preview
+                    decodes and fades in over it (the sharpen). Pure
+                    pan/zoom transforms only (no projection, no enter scale). */}
                 <motion.img
                   key={`thumb-${file.filePath}`}
                   src={thumbUrl}
@@ -651,7 +651,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                   onMouseDown={handleMouseDown}
                   animate={{ scale: zoom, x: pan.x, y: pan.y }}
                   transition={imageTransition}
-                  className={`max-h-[78vh] max-w-[82vw] ${cursorClass}`}
+                  className={`absolute inset-0 max-h-[78vh] max-w-[82vw] ${cursorClass}`}
                   style={{
                     transformOrigin: "center",
                     willChange: zoom > 1 ? "transform" : "auto",
@@ -662,8 +662,9 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                 {!previewLoaded && !isGif && (
                   <div className="shimmer pointer-events-none absolute inset-0" aria-hidden="true" />
                 )}
-                {/* Preview layer — crisp 1920px render fading over the
-                    thumbnail once decoded. */}
+                {/* Preview layer — in-flow sizer (1920px natural box, capped
+                    at 82vw/78vh): the crisp image, fading in over the
+                    placeholder thumbnail once decoded. */}
                 <motion.img
                   key={`prev-${file.filePath}`}
                   src={previewUrl}
@@ -673,7 +674,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                   onClick={handleImageClick}
                   onMouseDown={handleMouseDown}
                   onLoad={() => setPreviewLoaded(true)}
-                  className={`absolute inset-0 max-h-[78vh] max-w-[82vw] ${cursorClass}`}
+                  className={`relative max-h-[78vh] max-w-[82vw] ${cursorClass}`}
                   animate={{ scale: zoom, x: pan.x, y: pan.y, opacity: previewLoaded ? 1 : 0 }}
                   transition={imageTransition}
                   style={{
@@ -694,7 +695,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                     onClick={handleImageClick}
                     onMouseDown={handleMouseDown}
                     onLoad={() => setFullResLoaded(true)}
-                    className={`absolute inset-0 max-h-[78vh] max-w-[82vw] ${cursorClass}`}
+                    className={`absolute inset-0 z-20 max-h-[78vh] max-w-[82vw] ${cursorClass}`}
                     animate={{ scale: zoom, x: pan.x, y: pan.y, opacity: fullResLoaded ? 1 : 0 }}
                     transition={imageTransition}
                     style={{

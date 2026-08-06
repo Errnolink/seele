@@ -429,7 +429,11 @@ textarea,
   background-color: #0d0d12;
   z-index: 0;
 }
-.thumb-checkerboard > img {
+/* The base (in-flow) image sits above the checkerboard; absolutely
+ * positioned overlay layers (viewer preview/full-res) opt out via the
+ * .absolute class — forcing them to `relative` here would stack them
+ * below the base as a vertical duplicate. */
+.thumb-checkerboard > img:not(.absolute) {
   position: relative;
   z-index: 1;
 }
