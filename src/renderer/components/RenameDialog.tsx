@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
+import { OVERLAY_ENTER, OVERLAY_EXIT, PANEL_ENTER, PANEL_EXIT } from "../motion";
 import type { MediaFile } from "../types";
 
 interface RenameDialogProps {
@@ -62,19 +63,17 @@ export function RenameDialog({ file, onClose, onConfirm }: RenameDialogProps) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.18 }}
+      animate={{ opacity: 1, transition: OVERLAY_ENTER }}
+      exit={{ opacity: 0, transition: OVERLAY_EXIT }}
       className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-md p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 10 }}
-        transition={{ duration: 0.2 }}
+        initial={{ opacity: 0, y: 10, scale: 1.02 }}
+        animate={{ opacity: 1, y: 0, scale: 1, transition: PANEL_ENTER }}
+        exit={{ opacity: 0, y: 6, scale: 0.99, transition: PANEL_EXIT }}
         className="w-full max-w-md border-2 border-nerv-amber bg-nerv-panel eva-cut shadow-[0_0_30px_rgba(255,183,0,0.35)]"
       >
         {/* Header */}

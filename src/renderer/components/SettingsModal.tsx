@@ -20,6 +20,7 @@
  */
 import { useEffect, type ReactNode } from "react";
 import { motion } from "motion/react";
+import { OVERLAY_ENTER, OVERLAY_EXIT, PANEL_ENTER, PANEL_EXIT } from "../motion";
 import type { AppSettings } from "../../../electron/settings";
 
 export interface SettingsModalProps {
@@ -156,17 +157,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   return (
     <motion.div
       initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.18 }}
+      animate={{ opacity: 1, transition: OVERLAY_ENTER }}
+      exit={{ opacity: 0, transition: OVERLAY_EXIT }}
       className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
       onClick={onClose}
     >
       <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 10 }}
-        transition={{ duration: 0.2 }}
+        initial={{ opacity: 0, y: 10, scale: 1.02 }}
+        animate={{ opacity: 1, y: 0, scale: 1, transition: PANEL_ENTER }}
+        exit={{ opacity: 0, y: 6, scale: 0.99, transition: PANEL_EXIT }}
         className="relative w-full max-w-2xl border border-nerv-orange/60 bg-nerv-panel shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >

@@ -1,5 +1,6 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
+import { EASE_MECHANICAL, OVERLAY_ENTER, OVERLAY_EXIT } from "../motion";
 import type { MediaFile } from "../../scanner/types";
 import type { TagDef } from "../hooks/useTags";
 import { dirName, hasCameraData, plateId, type FileInsights } from "../inspectorUtils";
@@ -153,9 +154,6 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
     const [isPanning, setIsPanning] = useState(false);
     const [fullResLoaded, setFullResLoaded] = useState(false);
     const [previewLoaded, setPreviewLoaded] = useState(false);
-    // The file this viewer instance opened with — the opening scale pop
-    // only applies to it, so ←/→ navigation stays instant.
-    const openFilePathRef = useRef(file.filePath);
     const panStart = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
 
     // ── ui state ──
@@ -539,14 +537,14 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
           x: { type: "spring", stiffness: 600, damping: 45 },
           y: { type: "spring", stiffness: 600, damping: 45 },
           scale: { type: "spring", stiffness: 600, damping: 45 },
-          opacity: { duration: 0.25 },
+          opacity: { duration: 0.2, ease: EASE_MECHANICAL },
         };
 
     return (
       <motion.div
         initial={{ opacity: 0 }}
-        animate={{ opacity: 1, transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] } }}
-        exit={{ opacity: 0, transition: { duration: 0.12, ease: [0.16, 1, 0.3, 1] } }}
+        animate={{ opacity: 1, transition: OVERLAY_ENTER }}
+        exit={{ opacity: 0, transition: OVERLAY_EXIT }}
         className="fixed inset-0 z-50 flex flex-col bg-nerv-bg select-none"
         tabIndex={-1}
       >
@@ -640,10 +638,9 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             ) : (
               <div className="relative thumb-checkerboard" style={{ maxWidth: "82vw", maxHeight: "78vh" }}>
                 {/* Base layer — the ?w=640 thumbnail, always visible so
-                    opening never blanks. A subtle scale pop on open (only
-                    for the file the viewer was opened with; ←/→ navigation
-                    swaps instantly), then pure pan/zoom transforms — no
-                    shared-layout projection anywhere, so zoom can't ghost. */}
+                    opening never blanks. Pure pan/zoom transforms only
+                    (no shared-layout projection, no enter scale — a
+                    full-screen takeover reads cleanest as a fast fade). */}
                 <motion.img
                   key={`thumb-${file.filePath}`}
                   src={thumbUrl}
@@ -652,8 +649,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                   draggable={false}
                   onClick={handleImageClick}
                   onMouseDown={handleMouseDown}
-                  initial={file.filePath === openFilePathRef.current ? { scale: 0.97 } : false}
-                  animate={{ scale: zoom, x: pan.x, y: pan.y, opacity: 1 }}
+                  animate={{ scale: zoom, x: pan.x, y: pan.y }}
                   transition={imageTransition}
                   className={`max-h-[78vh] max-w-[82vw] ${cursorClass}`}
                   style={{

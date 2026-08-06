@@ -10,6 +10,7 @@
  */
 import { memo, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { OVERLAY_ENTER, OVERLAY_EXIT, PANEL_ENTER, PANEL_EXIT } from "../motion";
 import type { ActivityEntry } from "./ActivityLog";
 
 export interface SessionChangesModalProps {
@@ -90,17 +91,15 @@ export const SessionChangesModal: React.FC<SessionChangesModalProps> = memo(
         {open && (
           <motion.div
             initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.18 }}
+            animate={{ opacity: 1, transition: OVERLAY_ENTER }}
+            exit={{ opacity: 0, transition: OVERLAY_EXIT }}
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
             onClick={onClose}
           >
             <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              transition={{ duration: 0.2 }}
+              initial={{ opacity: 0, y: 10, scale: 1.02 }}
+              animate={{ opacity: 1, y: 0, scale: 1, transition: PANEL_ENTER }}
+              exit={{ opacity: 0, y: 6, scale: 0.99, transition: PANEL_EXIT }}
               className="w-[900px] max-h-[80vh] flex flex-col bg-nerv-panel border border-nerv-orange/50 shadow-[0_0_40px_rgba(0,0,0,0.8)]"
               onClick={(e) => e.stopPropagation()}
             >
