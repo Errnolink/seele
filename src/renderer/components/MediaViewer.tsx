@@ -152,6 +152,10 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
     const [pan, setPan] = useState<PanOffset>({ x: 0, y: 0 });
     const [isPanning, setIsPanning] = useState(false);
     const [fullResLoaded, setFullResLoaded] = useState(false);
+    const [previewLoaded, setPreviewLoaded] = useState(false);
+    // The file this viewer instance opened with — shared-element morphs
+    // (layoutId) only apply to it, so ←/→ navigation stays instant.
+    const openFilePathRef = useRef(file.filePath);
     const panStart = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
 
     // ── ui state ──
@@ -424,9 +428,17 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
       () => toMediaUrl(file.filePath),
       [file.filePath],
     );
+    // Shared-element thumbnail — the same ?w=640 the grid shows, so the
+    // opening morph expands the exact frame the user clicked (GIFs stream
+    // raw to stay animated).
+    const thumbUrl = React.useMemo(
+      () => (isGif ? toMediaUrl(file.filePath) : `${toMediaUrl(file.filePath)}?w=640`),
+      [file.filePath, isGif],
+    );
     // Reset full-res state whenever the file changes (new image).
     useEffect(() => {
       setFullResLoaded(false);
+      setPreviewLoaded(false);
     }, [file.filePath]);
 
     // Preload adjacent images for instant navigation (no flash on next/prev).
@@ -517,13 +529,26 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
           ? "cursor-grabbing"
           : "cursor-grab"
         : "cursor-zoom-in";
+    // Per-value transitions: the shared-element morph eases out slowly
+    // (spring 220/26 ≈ 0.5s) while pan/zoom stays snappy (600/45 ≈ 0.2s),
+    // and everything goes zero-duration during an active drag so the image
+    // tracks the cursor 1:1.
+    const imageTransition = isPanning
+      ? { duration: 0 }
+      : {
+          layout: { type: "spring", stiffness: 220, damping: 26 },
+          x: { type: "spring", stiffness: 600, damping: 45 },
+          y: { type: "spring", stiffness: 600, damping: 45 },
+          scale: { type: "spring", stiffness: 600, damping: 45 },
+          opacity: { duration: 0.25 },
+        };
 
     return (
       <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 8 }}
-        transition={{ duration: 0.2 }}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.3 }}
         className="fixed inset-0 z-50 flex flex-col bg-nerv-bg select-none"
         tabIndex={-1}
       >
@@ -616,19 +641,48 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
               />
             ) : (
               <div className="relative thumb-checkerboard" style={{ maxWidth: "82vw", maxHeight: "78vh" }}>
-                {/* Base preview layer — always visible, no blank flash on zoom */}
+                {/* Shared-element layer — the exact ?w=640 thumbnail from the
+                    grid tile, morphing (layoutId) into the viewer box on open
+                    and back on close. Always visible: opening never blanks.
+                    The projection is disabled once zoomed or navigated away,
+                    so the close stays a clean fade in those states. */}
                 <motion.img
-                  key={`prev-${file.filePath}`}
-                  src={previewUrl}
+                  layoutId={zoom === 1 && file.filePath === openFilePathRef.current ? file.filePath : undefined}
+                  key={`thumb-${file.filePath}`}
+                  src={thumbUrl}
                   alt={file.fileName}
                   decoding="async"
                   draggable={false}
                   onClick={handleImageClick}
                   onMouseDown={handleMouseDown}
+                  exit={{ opacity: 0, transition: { duration: 0.4 } }}
                   className={`max-h-[78vh] max-w-[82vw] ${cursorClass}`}
                   animate={{ scale: zoom, x: pan.x, y: pan.y }}
-                  transition={isPanning ? { duration: 0 } : { type: "spring", stiffness: 600, damping: 45 }}
-                  transformTemplate={({ x, y, scale }) => `translate(${x}px, ${y}px) scale(${scale})`}
+                  transition={imageTransition}
+                  style={{
+                    transformOrigin: "center",
+                    willChange: zoom > 1 ? "transform" : "auto",
+                  }}
+                />
+                {/* Sharpen sweep — shimmer across the thumbnail while the
+                    1920px preview decodes (GIFs stream raw, already crisp). */}
+                {!previewLoaded && !isGif && (
+                  <div className="shimmer pointer-events-none absolute inset-0" aria-hidden="true" />
+                )}
+                {/* Preview layer — crisp 1920px render fading over the
+                    thumbnail once decoded. */}
+                <motion.img
+                  key={`prev-${file.filePath}`}
+                  src={previewUrl}
+                  alt=""
+                  decoding="async"
+                  draggable={false}
+                  onClick={handleImageClick}
+                  onMouseDown={handleMouseDown}
+                  onLoad={() => setPreviewLoaded(true)}
+                  className={`absolute inset-0 max-h-[78vh] max-w-[82vw] ${cursorClass}`}
+                  animate={{ scale: zoom, x: pan.x, y: pan.y, opacity: previewLoaded ? 1 : 0 }}
+                  transition={imageTransition}
                   style={{
                     transformOrigin: "center",
                     willChange: zoom > 1 ? "transform" : "auto",
@@ -644,13 +698,13 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                     alt=""
                     decoding="async"
                     draggable={false}
+                    onClick={handleImageClick}
+                    onMouseDown={handleMouseDown}
                     onLoad={() => setFullResLoaded(true)}
-                    className={`absolute inset-0 max-h-[78vh] max-w-[82vw] transition-opacity duration-200 ${cursorClass}`}
-                    animate={{ scale: zoom, x: pan.x, y: pan.y }}
-                    transition={isPanning ? { duration: 0 } : { type: "spring", stiffness: 600, damping: 45 }}
-                    transformTemplate={({ x, y, scale }) => `translate(${x}px, ${y}px) scale(${scale})`}
+                    className={`absolute inset-0 max-h-[78vh] max-w-[82vw] ${cursorClass}`}
+                    animate={{ scale: zoom, x: pan.x, y: pan.y, opacity: fullResLoaded ? 1 : 0 }}
+                    transition={imageTransition}
                     style={{
-                      opacity: fullResLoaded ? 1 : 0,
                       transformOrigin: "center",
                       willChange: "transform",
                     }}
