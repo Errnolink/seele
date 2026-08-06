@@ -1,5 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, MotionConfig, motion } from "motion/react";
+import { AnimatePresence, MotionConfig } from "motion/react";
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
 import { MasonryGrid } from "./components/MasonryGrid";
@@ -1237,7 +1237,7 @@ export default function App() {
         />
 
         {/* Main content */}
-        <motion.main layout className="flex-1 min-w-0 h-full relative overflow-hidden bg-nerv-bg">
+        <main className="flex-1 min-w-0 h-full relative overflow-hidden bg-nerv-bg">
           {showIdleState ? (
             <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-5 p-8 text-center animate-fade-in">
               <svg
@@ -1330,7 +1330,7 @@ export default function App() {
               onToggleFileTag={tagSystem.toggleFileTag}
             />
           )}
-        </motion.main>
+        </main>
       </div>
       {/* Footer status telemetry bar (v2.5 §1b) */}
       {scan.status !== "idle" && (

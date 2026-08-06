@@ -10,7 +10,6 @@
  * Folder expansion state is LOCAL to this panel (a `Set<string>` of paths).
  */
 import { memo, useDeferredValue, useMemo, useState, type ReactNode } from "react";
-import { motion } from "motion/react";
 import type { FolderNode, MediaTypeFilter, ScanStats } from "../types";
 import type { TagDef } from "../hooks/useTags";
 import { formatBytes, pad } from "../utils";
@@ -753,9 +752,8 @@ function SidebarInner({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   return (
-    <motion.aside
-      layout
-      className={`shrink-0 h-full overflow-hidden ${
+    <aside
+      className={`shrink-0 h-full transition-[width] duration-300 overflow-hidden ${
         open ? "w-64" : "w-0"
       } border-r border-nerv-border/60 bg-nerv-panel`}
       aria-label="Sidebar"
@@ -796,7 +794,7 @@ function SidebarInner({
 
         <StorageTelemetry stats={stats} />
       </div>
-    </motion.aside>
+    </aside>
   );
 }
 

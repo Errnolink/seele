@@ -576,8 +576,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
         {/* ── main row: media stage + right side panel ── */}
         <div className="flex flex-1 min-h-0">
           {/* ── media stage (expands into panel's space when hidden) ── */}
-          <motion.div
-            layout
+          <div
             ref={mediaContainerRef}
             className="relative z-20 flex flex-1 min-w-0 items-center justify-center overflow-hidden"
             onMouseMove={handleMouseMove}
@@ -628,7 +627,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                   onMouseDown={handleMouseDown}
                   className={`max-h-[78vh] max-w-[82vw] ${cursorClass}`}
                   animate={{ scale: zoom, x: pan.x, y: pan.y }}
-                  transition={isPanning ? { duration: 0 } : { type: "spring", stiffness: 300, damping: 30 }}
+                  transition={isPanning ? { duration: 0 } : { type: "spring", stiffness: 600, damping: 45 }}
                   transformTemplate={({ x, y, scale }) => `translate(${x}px, ${y}px) scale(${scale})`}
                   style={{
                     transformOrigin: "center",
@@ -648,7 +647,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                     onLoad={() => setFullResLoaded(true)}
                     className={`absolute inset-0 max-h-[78vh] max-w-[82vw] transition-opacity duration-200 ${cursorClass}`}
                     animate={{ scale: zoom, x: pan.x, y: pan.y }}
-                    transition={isPanning ? { duration: 0 } : { type: "spring", stiffness: 300, damping: 30 }}
+                    transition={isPanning ? { duration: 0 } : { type: "spring", stiffness: 600, damping: 45 }}
                     transformTemplate={({ x, y, scale }) => `translate(${x}px, ${y}px) scale(${scale})`}
                     style={{
                       opacity: fullResLoaded ? 1 : 0,
@@ -689,15 +688,13 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
               <Hint keys="Esc" label="Close" />
             </div>
           )}
-          </motion.div>
+          </div>
 
           {/* ── right side panel (slide/fade, expands image when hidden) ── */}
-          <motion.div
-            layout
-            className={`relative z-20 flex-shrink-0 overflow-hidden border-l border-nerv-orange/20 bg-nerv-panel/90 no-drag ${
-              showMetadata ? "" : "pointer-events-none"
+          <div
+            className={`relative z-20 flex-shrink-0 overflow-hidden border-l border-nerv-orange/20 bg-nerv-panel/90 transition-[width,opacity] duration-200 ease-out no-drag ${
+              showMetadata ? "opacity-100" : "opacity-0 pointer-events-none"
             }`}
-            animate={{ opacity: showMetadata ? 1 : 0 }}
             style={{ width: showMetadata ? SIDE_PANEL_W : 0 }}
           >
             {/* Fixed-width content — the wrapper animates, the content never
@@ -815,7 +812,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                 )}
               </div>
             </div>
-          </motion.div>
+          </div>
         </div>
 
         {/* ── filmstrip (windowed, thin dock — full width under image + panel) ── */}
