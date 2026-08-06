@@ -529,14 +529,14 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
           ? "cursor-grabbing"
           : "cursor-grab"
         : "cursor-zoom-in";
-    // Per-value transitions: the shared-element morph eases out slowly
-    // (spring 220/26 ≈ 0.5s) while pan/zoom stays snappy (600/45 ≈ 0.2s),
+    // Per-value transitions: the shared-element morph eases out quickly
+    // (spring 360/28 ≈ 0.3s) while pan/zoom stays snappy (600/45 ≈ 0.2s),
     // and everything goes zero-duration during an active drag so the image
     // tracks the cursor 1:1.
     const imageTransition = isPanning
       ? { duration: 0 }
       : {
-          layout: { type: "spring", stiffness: 220, damping: 26 },
+          layout: { type: "spring", stiffness: 360, damping: 28 },
           x: { type: "spring", stiffness: 600, damping: 45 },
           y: { type: "spring", stiffness: 600, damping: 45 },
           scale: { type: "spring", stiffness: 600, damping: 45 },
@@ -548,7 +548,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        transition={{ duration: 0.3 }}
+        transition={{ duration: 0.2 }}
         className="fixed inset-0 z-50 flex flex-col bg-nerv-bg select-none"
         tabIndex={-1}
       >
@@ -641,29 +641,37 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
               />
             ) : (
               <div className="relative thumb-checkerboard" style={{ maxWidth: "82vw", maxHeight: "78vh" }}>
-                {/* Shared-element layer — the exact ?w=640 thumbnail from the
-                    grid tile, morphing (layoutId) into the viewer box on open
-                    and back on close. Always visible: opening never blanks.
-                    The projection is disabled once zoomed or navigated away,
-                    so the close stays a clean fade in those states. */}
-                <motion.img
+                {/* Shared-element projection wrapper — morphs from the
+                    clicked tile into the viewer box on open and back on
+                    close. Transforms live on the inner img, never here:
+                    projection and pan/zoom compose on separate elements,
+                    so zooming can't ghost into two images. Disabled once
+                    zoomed/navigated away, where close is a clean fade. */}
+                <motion.div
                   layoutId={zoom === 1 && file.filePath === openFilePathRef.current ? file.filePath : undefined}
-                  key={`thumb-${file.filePath}`}
-                  src={thumbUrl}
-                  alt={file.fileName}
-                  decoding="async"
-                  draggable={false}
-                  onClick={handleImageClick}
-                  onMouseDown={handleMouseDown}
-                  exit={{ opacity: 0, transition: { duration: 0.4 } }}
-                  className={`max-h-[78vh] max-w-[82vw] ${cursorClass}`}
-                  animate={{ scale: zoom, x: pan.x, y: pan.y }}
-                  transition={imageTransition}
-                  style={{
-                    transformOrigin: "center",
-                    willChange: zoom > 1 ? "transform" : "auto",
-                  }}
-                />
+                  className="relative w-fit"
+                  transition={{ layout: { type: "spring", stiffness: 360, damping: 28 } }}
+                  exit={{ opacity: 0, transition: { duration: 0.25 } }}
+                  style={{ willChange: "transform" }}
+                >
+                  {/* Thumbnail layer — always visible; the morphing content. */}
+                  <motion.img
+                    key={`thumb-${file.filePath}`}
+                    src={thumbUrl}
+                    alt={file.fileName}
+                    decoding="async"
+                    draggable={false}
+                    onClick={handleImageClick}
+                    onMouseDown={handleMouseDown}
+                    className={`max-h-[78vh] max-w-[82vw] ${cursorClass}`}
+                    animate={{ scale: zoom, x: pan.x, y: pan.y }}
+                    transition={imageTransition}
+                    style={{
+                      transformOrigin: "center",
+                      willChange: zoom > 1 ? "transform" : "auto",
+                    }}
+                  />
+                </motion.div>
                 {/* Sharpen sweep — shimmer across the thumbnail while the
                     1920px preview decodes (GIFs stream raw, already crisp). */}
                 {!previewLoaded && !isGif && (
@@ -680,6 +688,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                   onClick={handleImageClick}
                   onMouseDown={handleMouseDown}
                   onLoad={() => setPreviewLoaded(true)}
+                  exit={{ opacity: 0, transition: { duration: 0.25 } }}
                   className={`absolute inset-0 max-h-[78vh] max-w-[82vw] ${cursorClass}`}
                   animate={{ scale: zoom, x: pan.x, y: pan.y, opacity: previewLoaded ? 1 : 0 }}
                   transition={imageTransition}
@@ -701,6 +710,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                     onClick={handleImageClick}
                     onMouseDown={handleMouseDown}
                     onLoad={() => setFullResLoaded(true)}
+                    exit={{ opacity: 0, transition: { duration: 0.25 } }}
                     className={`absolute inset-0 max-h-[78vh] max-w-[82vw] ${cursorClass}`}
                     animate={{ scale: zoom, x: pan.x, y: pan.y, opacity: fullResLoaded ? 1 : 0 }}
                     transition={imageTransition}
