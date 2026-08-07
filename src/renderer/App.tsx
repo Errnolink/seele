@@ -3,6 +3,7 @@ import { AnimatePresence, MotionConfig } from "motion/react";
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
 import { MasonryGrid } from "./components/MasonryGrid";
+import { FileUpload } from "./components/FileUpload";
 import { FolderBrowser } from "./components/FolderBrowser";
 import MediaViewer from "./components/MediaViewer";
 import { ContextMenu } from "./components/ContextMenu";
@@ -18,6 +19,7 @@ import ActivityLog, { type ActivityEntry } from "./components/ActivityLog";
 import SessionChangesModal from "./components/SessionChangesModal";
 import TrashQueueModal from "./components/TrashQueueModal";
 import SettingsModal from "./components/SettingsModal";
+import { useToast } from "./components/useToast";
 import { DEFAULT_SETTINGS } from "./settingsDefaults";
 import type { AppSettings } from "../../electron/settings";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
@@ -119,6 +121,18 @@ function countFolders(node: FolderNode | null): number {
   return n;
 }
 
+/**
+ * Resolve the absolute path of a dropped File. Electron 33's
+ * `webUtils.getPathForFile` (exposed via `window.scanAPI`) is the supported
+ * replacement for the deprecated non-standard `File.path`; fall back to
+ * `.path` when the bridged call returns an empty string.
+ */
+function getDroppedPath(file: File): string | null {
+  const bridged = window.scanAPI.getPathForFile(file);
+  if (bridged) return bridged;
+  return (file as File & { path?: string }).path || null;
+}
+
 export default function App() {
   const {
     state: scan,
@@ -138,6 +152,9 @@ export default function App() {
 
   // ---- tag classification system (v2.5) ----
   const tagSystem = useTags();
+
+  // ---- telemetry toasts (transient confirmations for file actions) ----
+  const { addToast } = useToast();
 
   // ---- settings (performance knobs — issues.md item 6) ----
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -331,10 +348,12 @@ export default function App() {
           const it = items[i];
           if (it.kind === "file") {
             const f = it.getAsFile();
-            const p = (f as File & { path?: string })?.path;
-            if (p) {
-              droppedPath = p;
-              break;
+            if (f) {
+              const p = getDroppedPath(f);
+              if (p) {
+                droppedPath = p;
+                break;
+              }
             }
           }
         }
@@ -344,7 +363,7 @@ export default function App() {
         e.dataTransfer?.files &&
         e.dataTransfer.files.length > 0
       ) {
-        const p = (e.dataTransfer.files[0] as File & { path?: string })?.path;
+        const p = getDroppedPath(e.dataTransfer.files[0]);
         if (p) droppedPath = p;
       }
       if (droppedPath) {
@@ -387,14 +406,22 @@ export default function App() {
   }, []);
 
   // ---- favorites ----
-  const toggleFavorite = useCallback((file: MediaFile) => {
-    setFavorites((prev) => {
-      const next = new Set(prev);
-      if (next.has(file.filePath)) next.delete(file.filePath);
-      else next.add(file.filePath);
-      return next;
-    });
-  }, []);
+  const toggleFavorite = useCallback(
+    (file: MediaFile) => {
+      const adding = !favorites.has(file.filePath);
+      setFavorites((prev) => {
+        const next = new Set(prev);
+        if (next.has(file.filePath)) next.delete(file.filePath);
+        else next.add(file.filePath);
+        return next;
+      });
+      addToast({
+        message: adding ? "ADDED TO FAVORITES" : "REMOVED FROM FAVORITES",
+        variant: adding ? "success" : "info",
+      });
+    },
+    [favorites, addToast],
+  );
 
   // ---- file operations (organize & move) ----
 
@@ -498,7 +525,11 @@ export default function App() {
         ? { fromPath: paths[0], toPath: newPathByOld.get(paths[0]) }
         : undefined,
     );
-  }, [moveDialogPaths, onRemoveFiles, logActivity, advanceViewer]);
+    addToast({
+      message: okCount > 0 ? `MOVED ${okCount === 1 ? "1 FILE" : `${okCount} FILES`} → ${destName.toUpperCase()}` : `MOVE FAILED — ${destName.toUpperCase()}`,
+      variant: okCount > 0 ? "success" : "error",
+    });
+  }, [moveDialogPaths, onRemoveFiles, logActivity, advanceViewer, addToast]);
 
   /** Move files to a specific known directory (sidebar drop / quick move). */
   const handleMoveToDir = useCallback(async (filePaths: string[], destDir: string) => {
@@ -524,7 +555,11 @@ export default function App() {
       `→ ${destName}`,
       okCount > 0,
     );
-  }, [onRemoveFiles, logActivity, advanceViewer]);
+    addToast({
+      message: okCount > 0 ? `MOVED ${okCount === 1 ? "1 FILE" : `${okCount} FILES`} → ${destName.toUpperCase()}` : `MOVE FAILED — ${destName.toUpperCase()}`,
+      variant: okCount > 0 ? "success" : "error",
+    });
+  }, [onRemoveFiles, logActivity, advanceViewer, addToast]);
 
   /** Stage files for trash — removes them from the grid, nothing on disk. */
   const queueForTrash = useCallback((filesToQueue: MediaFile[]) => {
@@ -538,7 +573,11 @@ export default function App() {
       return next;
     });
     onRemoveFiles(new Set(filesToQueue.map((f) => f.filePath)));
-  }, [onRemoveFiles]);
+    addToast({
+      message: `${filesToQueue.length === 1 ? filesToQueue[0].fileName : `${filesToQueue.length} FILES`} STAGED FOR TRASH`,
+      variant: "warning",
+    });
+  }, [onRemoveFiles, addToast]);
 
   /** Grid context-menu / card trash button → stage, don't delete. */
   const handleTrashFile = useCallback((file: MediaFile) => {
@@ -603,8 +642,12 @@ export default function App() {
         "",
         true,
       );
+      addToast({
+        message: `${okCount === 1 ? firstName ?? "1 FILE" : `${okCount} FILES`} SENT TO TRASH`,
+        variant: "success",
+      });
     }
-  }, [trashQueue, logActivity]);
+  }, [trashQueue, logActivity, addToast]);
 
   /** Viewer trash button / Delete key: stage + auto-advance. */
   const handleViewerTrash = useCallback((file: MediaFile) => {
@@ -638,8 +681,12 @@ export default function App() {
       result.ok,
       result.ok ? { fromPath: file.filePath, toPath: result.newPath } : undefined,
     );
+    addToast({
+      message: result.ok ? `RENAMED → ${newName.toUpperCase()}` : `RENAME FAILED — ${result.error ?? "unknown error"}`,
+      variant: result.ok ? "success" : "error",
+    });
     return result;
-  }, [onRemoveFiles, onAddFiles, logActivity]);
+  }, [onRemoveFiles, onAddFiles, logActivity, addToast]);
 
   /**
    * Revert a committed move/rename by running the inverse disk operation
@@ -1089,26 +1136,14 @@ export default function App() {
 
       <TitleBar folder={folder} />
 
-      {/* Drag-and-drop overlay */}
+      {/* Drag-and-drop overlay — styled NERV drop zone (decorative only;
+          the app-root drag handlers above own enter/over/leave/drop). */}
       {isDragOver && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-nerv-bg/90 backdrop-blur-sm border-2 border-dashed border-nerv-orange pointer-events-none">
-          <div className="flex flex-col items-center gap-3">
-            <svg
-              viewBox="0 0 24 24"
-              width="72"
-              height="72"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.5}
-              className="text-nerv-orange"
-            >
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-            </svg>
-            <span className="font-display text-lg uppercase tracking-widest text-nerv-amber font-bold">
-              Drop Folder to Scan
-            </span>
-          </div>
-        </div>
+        <FileUpload
+          label="DROP TO SCAN"
+          color="orange"
+          className="pointer-events-none fixed inset-0 z-50 bg-nerv-bg/90 backdrop-blur-sm [&>div:first-child]:h-full [&>div:first-child]:w-full"
+        />
       )}
 
       {/* Header */}
