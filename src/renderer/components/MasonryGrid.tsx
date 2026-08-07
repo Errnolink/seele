@@ -92,7 +92,7 @@ function tileUrl(file: MediaFile, tileWidth: number): string {
   // continuous width range (audit A3).
   const w = Math.min(
     THUMB_MAX,
-    Math.max(THUMB_MIN, Math.round((Math.round(tileWidth * 1.5) / 32) * 32)),
+    Math.max(THUMB_MIN, Math.round(Math.round(tileWidth * 1.5) / 32) * 32),
   );
   // Both images and videos get ?w= — the main process routes video
   // thumbnails through ffmpeg frame extraction.

@@ -397,19 +397,31 @@ async function extractFrameWithFfmpeg(
     // Extract frame inside the concurrency gate so a grid of 50 videos
     // doesn't spawn 50 ffmpeg processes at once.
     await withFfmpegLimit(async () => {
-      const { promise, resolve, reject } = Promise.withResolvers<void>();
-      const args = opts.heic
-        ? ["-i", input, "-frames:v", "1", "-q:v", "3", "-update", "1", "-y", tmpFile]
-        : ["-ss", "1", "-i", input, "-frames:v", "1",
-           "-vf", `scale=${w}:-2`, "-q:v", "3", "-update", "1", "-y", tmpFile];
-      const proc = execFile(
-        ff,
-        args,
-        { timeout: 8000, windowsHide: true },
-        (err) => { if (err) reject(err); else resolve(); },
-      );
-      proc.on("error", reject);
-      await promise;
+      // Videos: extract at ~1s to skip title cards. Sub-second clips
+      // (reaction GIFs-as-MP4) have no frame at 1s — ffmpeg errors
+      // "No filtered frames" / encoder init failure, which would drop the
+      // tile. Retry once from the first frame for those. HEIC is
+      // extracted unscaled; a seek is invalid on tiled HEVC grids.
+      const run = (seek: boolean) =>
+        new Promise<void>((resolve, reject) => {
+          const args = opts.heic
+            ? ["-i", input, "-frames:v", "1", "-q:v", "3", "-update", "1", "-y", tmpFile]
+            : [...(seek ? ["-ss", "1"] : []), "-i", input, "-frames:v", "1",
+               "-vf", `scale=${w}:-2`, "-q:v", "3", "-update", "1", "-y", tmpFile];
+          const proc = execFile(
+            ff,
+            args,
+            { timeout: 8000, windowsHide: true },
+            (err) => { if (err) reject(err); else resolve(); },
+          );
+          proc.on("error", reject);
+        });
+      try {
+        await run(!opts.heic);
+      } catch (seekErr) {
+        if (opts.heic) throw seekErr;
+        await run(false);
+      }
     });
     return await fs.promises.readFile(tmpFile);
   } catch (e) {
