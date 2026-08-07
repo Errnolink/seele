@@ -8,11 +8,12 @@ import {
   CameraSection,
   ColorSpectrum,
   FileDetails,
-  Hairline,
   HashSection,
-  QuickActions,
   TagManager,
 } from "./InspectorParts";
+import { Badge } from "./Badge";
+import { Divider } from "./Divider";
+import { MonitorOverlay } from "./MonitorOverlay";
 
 /** Build a `media://` URL for the renderer. Mirrors the preload bridge so the
  * viewer works the same way as thumbnails. */
@@ -78,6 +79,11 @@ const SIDE_PANEL_W = 264;
 function clampZoom(z: number): number {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
 }
+
+/** Neutral square icon-button base for the viewer top bar; tone applied per button. */
+const topBarBtn =
+  "flex h-8 w-8 items-center justify-center border transition-[background-color,border-color,box-shadow] duration-150";
+const topBarBtnOrange = `${topBarBtn} border-nerv-orange/40 text-nerv-orange hover:border-nerv-orange hover:bg-nerv-orange/10 hover:shadow-[0_0_10px_rgba(255,152,48,0.25)]`;
 
 interface PanOffset {
   x: number;
@@ -157,9 +163,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
     const panStart = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
 
     // ── ui state ──
-    const [showHints, setShowHints] = useState(true);
     const [showMetadata, setShowMetadata] = useState(true);
-    const [controlsVisible, setControlsVisible] = useState(true);
 
     const isVideo = file.fileType === "video";
     const currentIndex = index ?? 0;
@@ -180,29 +184,6 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
         return () => cancelAnimationFrame(id);
       }
     }, [isVideo, file.filePath]);
-
-    // ── auto-hide hints after 4s ──
-    useEffect(() => {
-      setShowHints(true);
-      const timer = setTimeout(() => setShowHints(false), 4000);
-      return () => clearTimeout(timer);
-    }, [file.filePath]);
-
-    // ── auto-hide chrome (top bar, nav arrows, hints) on mouse idle (UX-17) ──
-    const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    useEffect(() => {
-      const onMove = () => {
-        setControlsVisible(true);
-        clearTimeout(hideTimerRef.current!);
-        hideTimerRef.current = setTimeout(() => setControlsVisible(false), 2500);
-      };
-      onMove();
-      window.addEventListener("mousemove", onMove);
-      return () => {
-        window.removeEventListener("mousemove", onMove);
-        clearTimeout(hideTimerRef.current!);
-      };
-    }, []);
 
     // ── scroll filmstrip to active item ──
     useLayoutEffect(() => {
@@ -551,45 +532,138 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
         {/* scanline overlay */}
         <div className="pointer-events-none absolute inset-0 z-10 bg-gradient-to-b from-transparent via-nerv-orange/[0.03] to-transparent animate-scanline" />
 
-        {/* corner ticks */}
-        <CornerTicks size={14} />
-
         {/* ── top bar ── */}
-        <div className={`titlebar-drag relative z-20 flex h-12 items-center justify-between border-b border-nerv-orange/20 bg-nerv-panel px-4 transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
-          <div className="flex items-center gap-3">
+        <div className="titlebar-drag relative z-20 flex h-12 items-center justify-between gap-3 border-b border-nerv-orange/20 bg-nerv-panel px-4">
+          <div className="flex min-w-0 items-center gap-3">
             <span className="eva-title font-display text-sm font-bold uppercase tracking-widest text-nerv-orange">
               File Viewer
             </span>
             {totalCount > 1 && (
-              <span className="border border-nerv-cyan/20 bg-nerv-cyan/10 px-2 py-0.5 font-mono text-[10px] text-nerv-cyan">
-                {currentIndex + 1} / {totalCount}
-              </span>
+              <Badge
+                variant="info"
+                label={`${currentIndex + 1} / ${totalCount}`}
+                className="flex h-8 items-center border border-nerv-cyan/20 bg-nerv-cyan/10 px-2 font-mono text-[9px] text-nerv-cyan"
+              />
             )}
           </div>
 
           <div className="no-drag flex items-center gap-3">
-            {/* zoom indicator (images only) */}
-            {!isVideo && (
-              <span className="font-mono text-[10px] text-nerv-muted">
-                {zoom > 1 ? `${zoom.toFixed(1)}×` : "FIT"}
-              </span>
-            )}
-            {/* metadata toggle */}
-            <button
-              type="button"
-              onClick={() => setShowMetadata((s) => !s)}
-              className="border border-nerv-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-muted transition-colors hover:border-nerv-cyan hover:text-nerv-cyan"
-            >
-              {showMetadata ? "Hide Info" : "Show Info"}
-            </button>
+            {/* action icons — favorite, move, rename, trash */}
+            <div className="flex items-center gap-1.5">
+              {onToggleFavorite && (
+                <button
+                  type="button"
+                  onClick={() => onToggleFavorite(file)}
+                  title={isFavorite ? "Unfavorite (F)" : "Favorite (F)"}
+                  aria-label="Toggle favorite"
+                  className={`${topBarBtn} border-nerv-amber/40 text-nerv-amber hover:border-nerv-amber hover:bg-nerv-amber/10 hover:shadow-[0_0_10px_rgba(255,183,0,0.25)]`}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill={isFavorite ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.8}>
+                    <path d="M12 17.3l-6.2 3.7 1.6-7L2 9.2l7.1-.6L12 2l2.9 6.6 7.1.6-5.4 4.8 1.6 7z" />
+                  </svg>
+                </button>
+              )}
+              {onMove && (
+                <button
+                  type="button"
+                  onClick={() => onMove(file)}
+                  title="Move (M)"
+                  aria-label="Move file"
+                  className={`${topBarBtn} border-nerv-lime/40 text-nerv-lime hover:border-nerv-lime hover:bg-nerv-lime/10 hover:shadow-[0_0_10px_rgba(201,233,138,0.25)]`}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+                    <path d="M5 12h14M13 6l6 6-6 6" />
+                  </svg>
+                </button>
+              )}
+              {onRename && (
+                <button
+                  type="button"
+                  onClick={() => onRename(file)}
+                  title="Rename (Shift+F2)"
+                  aria-label="Rename file"
+                  className={`${topBarBtn} border-nerv-cyan/40 text-nerv-cyan hover:border-nerv-cyan hover:bg-nerv-cyan/10 hover:shadow-[0_0_10px_rgba(32,240,255,0.25)]`}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+                    <path d="M17 3l4 4L8 20l-5 1 1-5z" />
+                  </svg>
+                </button>
+              )}
+              {onTrash && (
+                <button
+                  type="button"
+                  onClick={() => onTrash(file)}
+                  title="Queue trash (Del)"
+                  aria-label="Queue trash"
+                  className={`${topBarBtn} border-nerv-red/40 text-nerv-red hover:border-nerv-red hover:bg-nerv-red/10 hover:shadow-[0_0_10px_rgba(255,80,80,0.25)]`}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+                    <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
+                  </svg>
+                </button>
+              )}
+            </div>
 
+            {/* zoom controls (images only) */}
+            {!isVideo && (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setZoom((z) => {
+                      const next = clampZoom(z / ZOOM_STEP);
+                      if (next === 1) setPan({ x: 0, y: 0 });
+                      return next;
+                    })
+                  }
+                  title="Zoom out (−)"
+                  aria-label="Zoom out"
+                  className={topBarBtnOrange}
+                >
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <path d="M5 12h14" />
+                  </svg>
+                </button>
+                <span className="w-11 text-center font-mono text-[11px] tabular-nums text-nerv-cyan">
+                  {Math.round(zoom * 100)}%
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setZoom((z) => clampZoom(z * ZOOM_STEP))}
+                  title="Zoom in (+)"
+                  aria-label="Zoom in"
+                  className={topBarBtnOrange}
+                >
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
+                </button>
+              </div>
+            )}
+            {!isVideo && (
+              <button
+                type="button"
+                onClick={() => {
+                  setZoom(1);
+                  setPan({ x: 0, y: 0 });
+                }}
+                title="Fit to screen (0)"
+                className="bg-nerv-orange px-3 py-1 font-mono text-[10px] font-bold tracking-wider text-black transition-[background-color,box-shadow] hover:bg-nerv-orange-hot hover:shadow-[0_0_10px_rgba(255,152,48,0.35)]"
+              >
+                FIT
+              </button>
+            )}
             {/* close */}
             <button
               type="button"
               onClick={onClose}
-              className="border border-nerv-amber/50 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-nerv-amber transition-[background-color,box-shadow] hover:bg-nerv-amber/10 hover:shadow-[0_0_8px_rgba(255,183,0,0.2)]"
+              title="Close (Esc)"
+              aria-label="Close viewer"
+              className={topBarBtnOrange}
             >
-              ✕ Close
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
             </button>
           </div>
         </div>
@@ -604,12 +678,16 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
           >
+          {/* CRT monitor frame around the stage — subtle, no sweep, no glow */}
+          <MonitorOverlay color="cyan" opacity={0.15} />
+          {/* corner ticks frame the stage */}
+          <CornerTicks size={14} />
           {/* prev arrow */}
           {hasPrev && (
             <button
               type="button"
               onClick={() => navigate("prev")}
-              className={`absolute left-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-[opacity,border-color,box-shadow] duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,152,48,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
+              className={`absolute left-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-[opacity,border-color,box-shadow] duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,152,48,0.2)]`}
               title="Previous (←)"
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -713,28 +791,13 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             <button
               type="button"
               onClick={() => navigate("next")}
-              className={`absolute right-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-[opacity,border-color,box-shadow] duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,152,48,0.2)] ${controlsVisible ? "opacity-100" : "opacity-0"}`}
+              className={`absolute right-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-nerv-orange/30 bg-nerv-panel/90 text-nerv-orange transition-[opacity,border-color,box-shadow] duration-300 hover:border-nerv-orange hover:shadow-[0_0_12px_rgba(255,152,48,0.2)]`}
               title="Next (→)"
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                 <path d="M9 18l6-6-6-6" />
               </svg>
             </button>
-          )}
-
-          {/* keyboard hints overlay */}
-          {showHints && (
-            <div className="pointer-events-none absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 border border-nerv-border/60 bg-nerv-panel/90 px-3 py-1.5">
-              <Hint keys="←/→" label="Navigate" />
-              <Divider />
-              {!isVideo && <Hint keys="+/-/0" label="Zoom" />}
-              {!isVideo && <Divider />}
-              <Hint keys="I" label="Info" />
-              <Divider />
-              <Hint keys="Del" label="Queue Trash" />
-              <Divider />
-              <Hint keys="Esc" label="Close" />
-            </div>
           )}
           </div>
 
@@ -758,20 +821,15 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                     FILE
                   </span>
                   <span className="flex gap-1">
-                    <span className="tag-chip eva-cut bg-nerv-orange px-1.5 py-0.5 text-[8px] font-bold tracking-wider text-black">
-                      {plateId(file.filePath)}
-                    </span>
-                    <span
-                      className={`tag-chip eva-cut px-1.5 py-0.5 text-[8px] font-bold tracking-wider text-black ${
-                        isVideo ? "bg-nerv-green" : "bg-nerv-cyan"
-                      }`}
-                    >
-                      {isVideo ? "VID" : "IMG"}
-                    </span>
+                    <Badge variant="default" label={plateId(file.filePath)} />
+                    <Badge
+                      variant={isVideo ? "success" : "info"}
+                      label={isVideo ? "VID" : "IMG"}
+                    />
                   </span>
                 </div>
                 <div className="flex items-start justify-between gap-2">
-                  <span className="break-all font-mono text-[11px] font-bold leading-snug text-nerv-orange">
+                  <span className="break-all font-mono text-[11px] font-bold leading-snug text-nerv-cyan">
                     {file.fileName}
                   </span>
                   <button
@@ -779,7 +837,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                     onClick={() => void window.scanAPI.showItemInFolder(file.filePath)}
                     title="Reveal in folder"
                     aria-label="Reveal in folder"
-                    className="shrink-0 text-nerv-muted transition-colors hover:text-nerv-amber"
+                    className="shrink-0 text-nerv-orange transition-colors hover:text-nerv-amber"
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 3h6v6M10 14L21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" /></svg>
                   </button>
@@ -789,11 +847,11 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                   <span className="truncate">{dirName(file.filePath)}</span>
                 </div>
               </section>
-              <Hairline />
 
               {/* 2. TAGS — shared TagManager (same as split view) */}
               {tags && onToggleFileTag && (
                 <>
+                  <Divider label="TAGS" color="cyan" variant="dashed" />
                   <section className="px-4 py-3">
                     <TagManager
                       tags={tags}
@@ -802,36 +860,20 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
                       onToggleFileTag={onToggleFileTag}
                     />
                   </section>
-                  <Hairline />
                 </>
               )}
 
-              {/* 3. QUICK ACTIONS — shared 2x2 grid */}
-              <section className="px-4 py-3">
-                <div className="mb-2 text-[9px] font-mono uppercase tracking-widest text-nerv-muted">
-                  QUICK ACTIONS
-                </div>
-                <QuickActions
-                  file={file}
-                  isFavorite={isFavorite ?? false}
-                  onToggleFavorite={onToggleFavorite}
-                  onMove={onMove}
-                  onRename={onRename}
-                  onTrash={onTrash}
-                />
-              </section>
-              <Hairline />
-
-              {/* 4. FILE DETAILS — merged basic + resolution stats */}
+              {/* 3. FILE DETAILS — merged basic + resolution stats */}
+              <Divider label="DETAILS" color="orange" />
               <section className="px-4 py-3">
                 <div className="mb-2 text-[9px] font-mono uppercase tracking-widest text-nerv-muted">
                   FILE DETAILS
                 </div>
                 <FileDetails file={file} />
               </section>
-              <Hairline />
 
               {/* 5. COLOR SPECTRUM — shared gradient + labeled swatches */}
+              <Divider label="SPECTRUM" color="cyan" variant="dashed" />
               <section className="px-4 py-3">
                 <ColorSpectrum colors={palette} loading={insightsLoading} />
               </section>
@@ -839,7 +881,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
               {/* 6. CAMERA — omitted entirely when no EXIF data */}
               {hasCameraData(camera) && (
                 <>
-                  <Hairline />
+                  <Divider label="CAMERA" color="orange" />
                   <section className="px-4 py-3">
                     <CameraSection camera={camera} />
                   </section>
@@ -847,16 +889,18 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
               )}
 
               {/* 7. HASH — value + copy */}
-              <Hairline />
+              <Divider label="HASH" color="cyan" variant="dashed" />
               <section className="px-4 py-3">
                 <HashSection hash={hash} />
               </section>
 
               <div className="mt-auto px-4 py-2">
                 {queuedCount !== undefined && queuedCount > 0 && (
-                  <span className="font-mono text-[8px] font-bold tracking-wider text-nerv-red">
-                    {queuedCount} STAGED FOR TRASH
-                  </span>
+                  <Badge
+                    variant="danger"
+                    label={`${queuedCount} STAGED FOR TRASH`}
+                    className="font-mono"
+                  />
                 )}
               </div>
             </div>
@@ -921,6 +965,21 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             </div>
           </div>
         )}
+
+        {/* ── keyboard hints footer (absolute bottom edge) ── */}
+        <div className="relative z-20 flex-shrink-0 border-t border-nerv-orange/20 bg-nerv-panel/90 px-4 py-1.5">
+          <div className="flex items-center justify-center gap-3">
+            <Hint keys="←/→" label="Navigate" />
+            <HintDivider />
+            {!isVideo && <Hint keys="+/-/0" label="Zoom" />}
+            {!isVideo && <HintDivider />}
+            <Hint keys="I" label="Info" />
+            <HintDivider />
+            <Hint keys="Del" label="Queue Trash" />
+            <HintDivider />
+            <Hint keys="Esc" label="Close" />
+          </div>
+        </div>
       </motion.div>
     );
   },
@@ -945,7 +1004,7 @@ function CornerTicks({ size = 14 }: { size?: number }) {
 function Hint({ keys, label }: { keys: string; label: string }) {
   return (
     <span className="flex items-center gap-1.5 font-mono text-[10px] text-nerv-muted">
-      <kbd className="border border-nerv-orange/40 px-1.5 py-0.5 text-nerv-orange">
+      <kbd className="border border-nerv-orange/40 px-1.5 py-0.5 text-[8px] font-bold text-nerv-orange">
         {keys}
       </kbd>
       <span className="uppercase tracking-wider">{label}</span>
@@ -953,7 +1012,7 @@ function Hint({ keys, label }: { keys: string; label: string }) {
   );
 }
 
-function Divider() {
+function HintDivider() {
   return <span className="h-3 w-px bg-nerv-border/60" />;
 }
 

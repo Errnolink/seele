@@ -12,11 +12,7 @@ import type { MediaFile } from "../../scanner/types";
 import type { TagDef } from "../hooks/useTags";
 import { formatBytes, formatDate } from "../utils";
 import { aspectRatio, type FileInsights } from "../inspectorUtils";
-
-/** Hairline section divider. */
-export function Hairline() {
-  return <div className="h-px w-full bg-nerv-border/40" />;
-}
+import { Badge } from "./Badge";
 
 /** Key-value metadata row — label left (muted), value right (bright). */
 export const StatRow = memo(function StatRow({
@@ -77,17 +73,18 @@ export function TagManager({
       {fileTags.length > 0 ? (
         <div className="flex flex-wrap gap-1">
           {fileTags.map((tag) => (
-            <span
+            <Badge
               key={tag.key}
-              className="tag-chip px-1.5 py-0.5 text-[9px] font-mono font-bold tracking-wider"
+              label={tag.label}
+              className="font-mono"
               style={{
                 color: tag.color,
                 backgroundColor: tag.bg,
                 border: `1px solid ${tag.border}`,
               }}
-            >
-              {tag.label}
-            </span>
+              removable
+              onRemove={() => onToggleFileTag(filePath, tag.key)}
+            />
           ))}
         </div>
       ) : (

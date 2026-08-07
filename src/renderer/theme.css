@@ -122,3 +122,16 @@
     opacity: 1;
   }
 }
+
+/* Terminal block cursor (TerminalDisplay) — step-end keeps it a hard
+   on/off blink, no soft fade. */
+@keyframes cursor-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}

@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { OVERLAY_ENTER, OVERLAY_EXIT, PANEL_ENTER, PANEL_EXIT } from "../motion";
+import { TargetingContainer } from "./TargetingContainer";
 import type { MediaFile } from "../types";
 
 interface RenameDialogProps {
@@ -70,11 +71,13 @@ export function RenameDialog({ file, onClose, onConfirm }: RenameDialogProps) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <motion.div
+      <TargetingContainer
+        label="RENAME"
+        color="amber"
         initial={{ opacity: 0, y: 10, scale: 1.02 }}
         animate={{ opacity: 1, y: 0, scale: 1, transition: PANEL_ENTER }}
         exit={{ opacity: 0, y: 6, scale: 0.99, transition: PANEL_EXIT }}
-        className="w-full max-w-md border-2 border-nerv-amber bg-nerv-panel eva-cut shadow-[0_0_30px_rgba(255,183,0,0.35)]"
+        className="w-full max-w-md flex flex-col shadow-[0_0_30px_rgba(0,0,0,0.6)]"
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-nerv-border pb-3 p-4">
@@ -149,7 +152,7 @@ export function RenameDialog({ file, onClose, onConfirm }: RenameDialogProps) {
             <span>SAVE RENAME</span>
           </button>
         </div>
-      </motion.div>
+      </TargetingContainer>
     </motion.div>
   );
 }
