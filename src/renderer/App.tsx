@@ -201,8 +201,23 @@ export default function App() {
   // deferred value coalesces intermediate positions so the pack recomputes
   // at most once per frame while the label still updates live.
   const packedDensity = useDeferredValue(gridDensity);
-  /** Folders hidden from the grid via context menu (subtree match). */
-  const [hiddenFolders, setHiddenFolders] = useState<Set<string>>(new Set());
+  /** Folders hidden from the grid via context menu (subtree match).
+   * Persisted to localStorage (same pattern as tags) so hides survive restarts. */
+  const [hiddenFolders, setHiddenFolders] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem("wiergise:hiddenFolders");
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) return new Set(parsed.filter((p) => typeof p === "string"));
+      }
+    } catch {
+      /* corrupt entry — start empty */
+    }
+    return new Set();
+  });
+  useEffect(() => {
+    localStorage.setItem("wiergise:hiddenFolders", JSON.stringify([...hiddenFolders]));
+  }, [hiddenFolders]);
   const toggleHideFolder = useCallback((folderPath: string) => {
     setHiddenFolders((prev) => {
       const next = new Set(prev);
