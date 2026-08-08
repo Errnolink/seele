@@ -46,11 +46,10 @@
 
   /* ---- animations ---- */
   --animate-pulse-soft: pulse-soft 2.5s ease-in-out infinite;
-  --animate-glow-orange: glow-orange 2.5s ease-in-out infinite;
   --animate-scanline: scanline 4s linear infinite;
   --animate-boot-glitch: matrix-glitch 0.5s steps(3, end);
-  --animate-scanline-bar: scanline-bar 1.4s ease-in-out infinite;
   --animate-pulse: pulse-soft 2s ease-in-out infinite;
+  --animate-fade-in: fade-in 150ms ease-out;
 }
 
 /* ---- keyframes ---- */
@@ -64,29 +63,8 @@
   }
 }
 
-@keyframes glow-orange {
-  0%,
-  100% {
-    box-shadow: 0 0 12px rgba(255, 85, 0, 0.25);
-  }
-  50% {
-    box-shadow: 0 0 24px rgba(255, 85, 0, 0.45);
-  }
-}
-
-/* Skeleton shimmer sweep (§4) — used by .shimmer in index.css */
-@keyframes shimmer-sweep {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
-}
-
-/* Cheap opacity-pulse shimmer — GPU-composited, no repaint. Used when
-   reduce-motion is active or the OS requests reduced motion (issues.md
-   item 2 — the gradient sweep repaints on every tile). */
+/* Skeleton shimmer — opacity pulse, GPU-composited, no repaint (used by
+   .shimmer in index.css; the old gradient sweep repainted every tile). */
 @keyframes shimmer-pulse {
   0%,
   100% {
@@ -134,11 +112,26 @@
   }
 }
 
-@keyframes scanline-bar {
-  0% {
-    transform: translateX(-100%);
+/* Generic mount fade — view switches, modal backdrops. Opacity only
+   (GPU-composited). Killed by the existing reduce-motion rules. */
+@keyframes fade-in {
+  from {
+    opacity: 0;
   }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Terminal block cursor (TerminalDisplay) — step-end keeps it a hard
+   on/off blink, no soft fade. */
+@keyframes cursor-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
   100% {
-    transform: translateX(400%);
+    opacity: 0;
   }
 }

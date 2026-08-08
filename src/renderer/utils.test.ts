@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatClock, formatDate, formatDateTime, pad } from "./utils";
+import { formatBytes, formatClock, formatDate, pad } from "./utils";
 
 describe("formatBytes", () => {
   it("returns 0 B for zero, negative, and NaN sizes", () => {
@@ -56,18 +56,6 @@ describe("formatDate", () => {
 
   it("zero-pads month and day", () => {
     expect(formatDate(new Date(2024, 2, 3, 12, 0, 0).getTime())).toBe("2024-03-03");
-  });
-});
-
-describe("formatDateTime", () => {
-  it("returns unknown for invalid timestamps", () => {
-    expect(formatDateTime(0)).toBe("unknown");
-    expect(formatDateTime(NaN)).toBe("unknown");
-  });
-
-  it("formats date and clock with zero-padded components", () => {
-    expect(formatDateTime(new Date(2024, 4, 7, 9, 5, 3).getTime())).toBe("2024-05-07 09:05:03");
-    expect(formatDateTime(new Date(2024, 4, 7, 23, 59, 59).getTime())).toBe("2024-05-07 23:59:59");
   });
 });
 

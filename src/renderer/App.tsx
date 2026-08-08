@@ -1,7 +1,9 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, MotionConfig } from "motion/react";
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
 import { MasonryGrid } from "./components/MasonryGrid";
+import { FileUpload } from "./components/FileUpload";
 import { FolderBrowser } from "./components/FolderBrowser";
 import MediaViewer from "./components/MediaViewer";
 import { ContextMenu } from "./components/ContextMenu";
@@ -17,12 +19,16 @@ import ActivityLog, { type ActivityEntry } from "./components/ActivityLog";
 import SessionChangesModal from "./components/SessionChangesModal";
 import TrashQueueModal from "./components/TrashQueueModal";
 import SettingsModal from "./components/SettingsModal";
-import { DEFAULT_SETTINGS } from "./settingsDefaults";
-import type { AppSettings } from "../../electron/settings";
+import { useToast } from "./components/useToast";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { formatBytes } from "./utils";
+import { LARGE_FILE_BYTES } from "./types";
 import { useScanState } from "./hooks/useScanState";
 import { useTags } from "./hooks/useTags";
+import { useSettings } from "./hooks/useSettings";
+import { useFavorites } from "./hooks/useFavorites";
+import { useSelection } from "./hooks/useSelection";
+import { useHiddenFolders } from "./hooks/useHiddenFolders";
 import type {
   FolderNode,
   GroupMode,
@@ -34,10 +40,8 @@ import type {
   ViewMode,
 } from "./types";
 import type { ScanProgress } from "../scanner/types";
-import type { MediaId } from "./types";
 
 const SEARCH_DEBOUNCE_MS = 200;
-const LARGE_FILE_BYTES = 50 * 1024 * 1024;
 
 /**
  * Build a nested folder tree from the flat file list (§10.1).
@@ -118,6 +122,18 @@ function countFolders(node: FolderNode | null): number {
   return n;
 }
 
+/**
+ * Resolve the absolute path of a dropped File. Electron 33's
+ * `webUtils.getPathForFile` (exposed via `window.scanAPI`) is the supported
+ * replacement for the deprecated non-standard `File.path`; fall back to
+ * `.path` when the bridged call returns an empty string.
+ */
+function getDroppedPath(file: File): string | null {
+  const bridged = window.scanAPI.getPathForFile(file);
+  if (bridged) return bridged;
+  return (file as File & { path?: string }).path || null;
+}
+
 export default function App() {
   const {
     state: scan,
@@ -138,33 +154,12 @@ export default function App() {
   // ---- tag classification system (v2.5) ----
   const tagSystem = useTags();
 
+  // ---- telemetry toasts (transient confirmations for file actions) ----
+  const { addToast } = useToast();
+
   // ---- settings (performance knobs — issues.md item 6) ----
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const { settings, updateSettings } = useSettings();
   const [showSettings, setShowSettings] = useState(false);
-  // Load persisted settings on mount. On a true first launch (no file on
-  // disk), adopt the OS-level reduced-motion preference as the default
-  // and persist it so it survives restarts.
-  useEffect(() => {
-    void window.scanAPI.getSettings().then((res) => {
-      if (
-        !res.exists &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      ) {
-        setSettings({ ...res.settings, reduceMotion: true });
-        void window.scanAPI.setSettings({ reduceMotion: true });
-      } else {
-        setSettings(res.settings);
-      }
-    }).catch(() => {
-      /* defaults already in state — best-effort */
-    });
-  }, []);
-  const updateSettings = useCallback((patch: Partial<AppSettings>) => {
-    setSettings((prev) => ({ ...prev, ...patch }));
-    void window.scanAPI.setSettings(patch).catch(() => {
-      /* main also clamps — best-effort */
-    });
-  }, []);
 
   // ---- core state ----
   const [booted, setBooted] = useState(false);
@@ -183,20 +178,25 @@ export default function App() {
   // deferred value coalesces intermediate positions so the pack recomputes
   // at most once per frame while the label still updates live.
   const packedDensity = useDeferredValue(gridDensity);
-  /** Folders hidden from the grid via context menu (subtree match). */
-  const [hiddenFolders, setHiddenFolders] = useState<Set<string>>(new Set());
-  const toggleHideFolder = useCallback((folderPath: string) => {
-    setHiddenFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(folderPath)) next.delete(folderPath);
-      else next.add(folderPath);
-      return next;
-    });
-  }, []);
+  const { hiddenFolders, toggleHideFolder } = useHiddenFolders();
 
   // ---- selection + favorites ----
-  const [selectedIds, setSelectedIds] = useState<Set<MediaId>>(new Set());
-  const [favorites, setFavorites] = useState<Set<MediaId>>(new Set());
+  const { selectedIds, toggleSelect, clearSelection, removeMany: removeManySelected } =
+    useSelection();
+  const { favorites, toggleFavorite: toggleFavoriteBase, toggleFavoriteMany } =
+    useFavorites();
+  /** Wrapper that toasts — `adding` is computed outside the updater
+   * (StrictMode-safe; no side effects inside setFavorites). */
+  const toggleFavorite = useCallback(
+    (file: MediaFile) => {
+      const adding = toggleFavoriteBase(file);
+      addToast({
+        message: adding ? "ADDED TO FAVORITES" : "REMOVED FROM FAVORITES",
+        variant: adding ? "success" : "info",
+      });
+    },
+    [toggleFavoriteBase, addToast],
+  );
 
   // ---- overlays ----
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
@@ -330,10 +330,12 @@ export default function App() {
           const it = items[i];
           if (it.kind === "file") {
             const f = it.getAsFile();
-            const p = (f as File & { path?: string })?.path;
-            if (p) {
-              droppedPath = p;
-              break;
+            if (f) {
+              const p = getDroppedPath(f);
+              if (p) {
+                droppedPath = p;
+                break;
+              }
             }
           }
         }
@@ -343,7 +345,7 @@ export default function App() {
         e.dataTransfer?.files &&
         e.dataTransfer.files.length > 0
       ) {
-        const p = (e.dataTransfer.files[0] as File & { path?: string })?.path;
+        const p = getDroppedPath(e.dataTransfer.files[0]);
         if (p) droppedPath = p;
       }
       if (droppedPath) {
@@ -360,40 +362,6 @@ export default function App() {
     },
     [onReset, onRestore],
   );
-
-  // ---- selection ----
-  const toggleSelect = useCallback((filePath: string, e: React.MouseEvent) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (e.ctrlKey || e.metaKey) {
-        // toggle
-        if (next.has(filePath)) next.delete(filePath);
-        else next.add(filePath);
-      } else if (e.shiftKey) {
-        // additive
-        next.add(filePath);
-      } else {
-        // plain click → exclusive select
-        next.clear();
-        next.add(filePath);
-      }
-      return next;
-    });
-  }, []);
-
-  const clearSelection = useCallback(() => {
-    setSelectedIds(new Set());
-  }, []);
-
-  // ---- favorites ----
-  const toggleFavorite = useCallback((file: MediaFile) => {
-    setFavorites((prev) => {
-      const next = new Set(prev);
-      if (next.has(file.filePath)) next.delete(file.filePath);
-      else next.add(file.filePath);
-      return next;
-    });
-  }, []);
 
   // ---- file operations (organize & move) ----
 
@@ -476,11 +444,7 @@ export default function App() {
       // (ui-upgrade.md Issue 2B).
       advanceViewer(moved);
       onRemoveFiles(moved);
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        for (const p of moved) next.delete(p);
-        return next;
-      });
+      removeManySelected(moved);
     }
     const destName = destDir.split(/[\\/]/).pop() || destDir;
     const okCount = results.filter((r) => r.ok).length;
@@ -497,7 +461,11 @@ export default function App() {
         ? { fromPath: paths[0], toPath: newPathByOld.get(paths[0]) }
         : undefined,
     );
-  }, [moveDialogPaths, onRemoveFiles, logActivity, advanceViewer]);
+    addToast({
+      message: okCount > 0 ? `MOVED ${okCount === 1 ? "1 FILE" : `${okCount} FILES`} → ${destName.toUpperCase()}` : `MOVE FAILED — ${destName.toUpperCase()}`,
+      variant: okCount > 0 ? "success" : "error",
+    });
+  }, [moveDialogPaths, onRemoveFiles, logActivity, advanceViewer, addToast, removeManySelected]);
 
   /** Move files to a specific known directory (sidebar drop / quick move). */
   const handleMoveToDir = useCallback(async (filePaths: string[], destDir: string) => {
@@ -509,11 +477,7 @@ export default function App() {
     if (moved.size > 0) {
       advanceViewer(moved);
       onRemoveFiles(moved);
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        for (const p of moved) next.delete(p);
-        return next;
-      });
+      removeManySelected(moved);
     }
     const destName = destDir.split(/[\\/]/).pop() || destDir;
     const okCount = results.filter((r) => r.ok).length;
@@ -523,7 +487,11 @@ export default function App() {
       `→ ${destName}`,
       okCount > 0,
     );
-  }, [onRemoveFiles, logActivity, advanceViewer]);
+    addToast({
+      message: okCount > 0 ? `MOVED ${okCount === 1 ? "1 FILE" : `${okCount} FILES`} → ${destName.toUpperCase()}` : `MOVE FAILED — ${destName.toUpperCase()}`,
+      variant: okCount > 0 ? "success" : "error",
+    });
+  }, [onRemoveFiles, logActivity, advanceViewer, addToast, removeManySelected]);
 
   /** Stage files for trash — removes them from the grid, nothing on disk. */
   const queueForTrash = useCallback((filesToQueue: MediaFile[]) => {
@@ -537,7 +505,11 @@ export default function App() {
       return next;
     });
     onRemoveFiles(new Set(filesToQueue.map((f) => f.filePath)));
-  }, [onRemoveFiles]);
+    addToast({
+      message: `${filesToQueue.length === 1 ? filesToQueue[0].fileName : `${filesToQueue.length} FILES`} STAGED FOR TRASH`,
+      variant: "warning",
+    });
+  }, [onRemoveFiles, addToast]);
 
   /** Grid context-menu / card trash button → stage, don't delete. */
   const handleTrashFile = useCallback((file: MediaFile) => {
@@ -549,8 +521,8 @@ export default function App() {
     if (selectedIds.size === 0) return;
     const queued = derivedFilesRef.current.filter((f) => selectedIds.has(f.filePath));
     queueForTrash(queued);
-    setSelectedIds(new Set());
-  }, [selectedIds, queueForTrash]);
+    clearSelection();
+  }, [selectedIds, queueForTrash, clearSelection]);
 
   /** Pull a staged file back into the grid — no disk operation ever happened. */
   const restoreFromQueue = useCallback((filePath: string) => {
@@ -602,8 +574,12 @@ export default function App() {
         "",
         true,
       );
+      addToast({
+        message: `${okCount === 1 ? firstName ?? "1 FILE" : `${okCount} FILES`} SENT TO TRASH`,
+        variant: "success",
+      });
     }
-  }, [trashQueue, logActivity]);
+  }, [trashQueue, logActivity, addToast]);
 
   /** Viewer trash button / Delete key: stage + auto-advance. */
   const handleViewerTrash = useCallback((file: MediaFile) => {
@@ -637,8 +613,12 @@ export default function App() {
       result.ok,
       result.ok ? { fromPath: file.filePath, toPath: result.newPath } : undefined,
     );
+    addToast({
+      message: result.ok ? `RENAMED → ${newName.toUpperCase()}` : `RENAME FAILED — ${result.error ?? "unknown error"}`,
+      variant: result.ok ? "success" : "error",
+    });
     return result;
-  }, [onRemoveFiles, onAddFiles, logActivity]);
+  }, [onRemoveFiles, onAddFiles, logActivity, addToast]);
 
   /**
    * Revert a committed move/rename by running the inverse disk operation
@@ -718,6 +698,28 @@ export default function App() {
       }
       return next;
     });
+  }, []);
+
+  // ---- MasonryGrid call-site callbacks ----
+  // Stable identities so the memoized MasonryView/GridView/ListView and
+  // their MediaCard tiles don't re-render on every App state change
+  // (audit A1 — inline closures here busted every memoized child).
+  const onGridRename = useCallback((f: MediaFile) => {
+    setRenameDialogFile(f);
+  }, []);
+  const onGridContextMenu = useCallback((file: MediaFile, e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenu({ file, x: e.clientX, y: e.clientY });
+  }, []);
+  const onGridInspect = useCallback(
+    (file: MediaFile) => {
+      setActiveInspectFile(file);
+      if (viewMode !== "split") openViewer(file);
+    },
+    [viewMode, openViewer],
+  );
+  const onGridCloseInspector = useCallback(() => {
+    setActiveInspectFile(null);
   }, []);
 
   // ---- keyboard shortcuts (§11) ----
@@ -1026,8 +1028,9 @@ export default function App() {
   const showIdleState = scan.status === "idle" && scan.count === 0;
 
   return (
-    <div
-      className={`h-screen w-screen flex flex-col bg-nerv-bg text-nerv-text overflow-hidden relative font-mono select-none ${
+    <MotionConfig reducedMotion={settings.reduceMotion ? "always" : "user"}>
+      <div
+        className={`h-screen w-screen flex flex-col bg-nerv-bg text-nerv-text overflow-hidden relative font-mono select-none ${
         settings.reduceMotion ? "seele-reduce-motion" : ""
       } ${settings.dialogBlur ? "" : "seele-no-blur"}`}
       onDragEnter={(e) => {
@@ -1065,26 +1068,14 @@ export default function App() {
 
       <TitleBar folder={folder} />
 
-      {/* Drag-and-drop overlay */}
+      {/* Drag-and-drop overlay — styled NERV drop zone (decorative only;
+          the app-root drag handlers above own enter/over/leave/drop). */}
       {isDragOver && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-nerv-bg/90 backdrop-blur-sm border-2 border-dashed border-nerv-orange pointer-events-none">
-          <div className="flex flex-col items-center gap-3">
-            <svg
-              viewBox="0 0 24 24"
-              width="72"
-              height="72"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.5}
-              className="text-nerv-orange"
-            >
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-            </svg>
-            <span className="font-display text-lg uppercase tracking-widest text-nerv-amber font-bold">
-              Drop Folder to Scan
-            </span>
-          </div>
-        </div>
+        <FileUpload
+          label="DROP TO SCAN"
+          color="orange"
+          className="pointer-events-none fixed inset-0 z-50 bg-nerv-bg/90 backdrop-blur-sm [&>div:first-child]:h-full [&>div:first-child]:w-full"
+        />
       )}
 
       {/* Header */}
@@ -1215,7 +1206,7 @@ export default function App() {
         {/* Main content */}
         <main className="flex-1 min-w-0 h-full relative overflow-hidden bg-nerv-bg">
           {showIdleState ? (
-            <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-5 p-8 text-center">
+            <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-5 p-8 text-center animate-fade-in">
               <svg
                 viewBox="0 0 24 24"
                 width="64"
@@ -1265,7 +1256,7 @@ export default function App() {
               }
             />
           ) : groups.length === 0 || resultCount === 0 ? (
-            <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-3">
+            <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-3 animate-fade-in">
               <svg
                 viewBox="0 0 24 24"
                 width="48"
@@ -1292,18 +1283,12 @@ export default function App() {
               onToggleSelect={toggleSelect}
               onOpen={openViewer}
               onMove={handleMoveFile}
-              onRename={(f) => setRenameDialogFile(f)}
+              onRename={onGridRename}
               onTrash={handleTrashFile}
               onToggleFavorite={toggleFavorite}
-              onContextMenu={(file, e) => {
-                e.preventDefault();
-                setContextMenu({ file, x: e.clientX, y: e.clientY });
-              }}
-              onInspect={(file) => {
-                setActiveInspectFile(file);
-                if (viewMode !== "split") openViewer(file);
-              }}
-              onCloseInspector={() => setActiveInspectFile(null)}
+              onContextMenu={onGridContextMenu}
+              onInspect={onGridInspect}
+              onCloseInspector={onGridCloseInspector}
               activeInspectFile={activeInspectFile}
               reloadEpoch={reloadEpoch}
               overscan={settings.overscan}
@@ -1542,14 +1527,7 @@ export default function App() {
               const picked = derivedFiles
                 .filter((f) => selectedIds.has(f.filePath))
                 .map((f) => f.filePath);
-              setFavorites((prev) => {
-                const next = new Set(prev);
-                for (const p of picked) {
-                  if (next.has(p)) next.delete(p);
-                  else next.add(p);
-                }
-                return next;
-              });
+              toggleFavoriteMany(picked);
             }}
           >
             <span className="text-nerv-amber text-xs">★</span>
@@ -1610,17 +1588,18 @@ export default function App() {
       )}
 
       {/* Lightbox */}
-      {viewerIndex !== null && derivedFiles[viewerIndex] && (
-        <MediaViewer
-          file={derivedFiles[viewerIndex]}
-          files={derivedFiles}
-          index={viewerIndex}
-          onClose={() => {
-            setViewerIndex(null);
-            viewerFilePathRef.current = null;
-          }}
-          onNavigate={navigateViewer}
-          onNavigateTo={(i) => {
+      <AnimatePresence>
+        {viewerIndex !== null && derivedFiles[viewerIndex] && (
+          <MediaViewer
+            file={derivedFiles[viewerIndex]}
+            files={derivedFiles}
+            index={viewerIndex}
+            onClose={() => {
+              setViewerIndex(null);
+              viewerFilePathRef.current = null;
+            }}
+            onNavigate={navigateViewer}
+            onNavigateTo={(i) => {
             if (derivedFiles[i]) {
               viewerFilePathRef.current = derivedFiles[i].filePath;
               setViewerIndex(i);
@@ -1642,7 +1621,8 @@ export default function App() {
           }
           onToggleFileTag={tagSystem.toggleFileTag}
         />
-      )}
+        )}
+      </AnimatePresence>
 
       {moveDialogPaths && folderTree && (
         <MoveDialog
@@ -1693,41 +1673,43 @@ export default function App() {
       )}
 
       {/* Overlays */}
-      {showHelp && <KeyboardHelp onClose={() => setShowHelp(false)} />}
-      {showPalette && (
-        <CommandPalette
-          files={derivedFiles}
-          onClose={() => setShowPalette(false)}
-          onSelect={(f) => {
-            setShowPalette(false);
-            openViewer(f);
-          }}
-        />
-      )}
-      {showAnalytics && (
-        <AnalyticsModal
-          files={files}
-          onClose={() => setShowAnalytics(false)}
-          onOpenMedia={(f) => {
-            setShowAnalytics(false);
-            openViewer(f);
-          }}
-        />
-      )}
+      <AnimatePresence>{showHelp && <KeyboardHelp onClose={() => setShowHelp(false)} />}</AnimatePresence>
+      <AnimatePresence>
+        {showPalette && (
+          <CommandPalette
+            files={derivedFiles}
+            onClose={() => setShowPalette(false)}
+            onSelect={(f) => {
+              setShowPalette(false);
+              openViewer(f);
+            }}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showAnalytics && (
+          <AnalyticsModal
+            files={files}
+            onClose={() => setShowAnalytics(false)}
+            onOpenMedia={(f) => {
+              setShowAnalytics(false);
+              openViewer(f);
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Session Audit Trail Modal — v2.5 §Module 7 */}
-      {showSessionLog && (
-        <SessionChangesModal
-          open={showSessionLog}
-          entries={activityLog}
-          onClose={() => setShowSessionLog(false)}
-          onClear={() => {
-            setActivityLog([]);
-            setShowSessionLog(false);
-          }}
-          onRevert={revertEntry}
-        />
-      )}
+      <SessionChangesModal
+        open={showSessionLog}
+        entries={activityLog}
+        onClose={() => setShowSessionLog(false)}
+        onClear={() => {
+          setActivityLog([]);
+          setShowSessionLog(false);
+        }}
+        onRevert={revertEntry}
+      />
 
       {/* Trash Queue badge + modal (ui-upgrade.md Issue 1) */}
       {trashQueue.size > 0 && (
@@ -1753,13 +1735,16 @@ export default function App() {
       />
 
       {/* Settings — performance & accessibility knobs (issues.md item 6) */}
-      {showSettings && (
-        <SettingsModal
-          settings={settings}
-          onChange={updateSettings}
-          onClose={() => setShowSettings(false)}
-        />
-      )}
-    </div>
+      <AnimatePresence>
+        {showSettings && (
+          <SettingsModal
+            settings={settings}
+            onChange={updateSettings}
+            onClose={() => setShowSettings(false)}
+          />
+        )}
+      </AnimatePresence>
+      </div>
+    </MotionConfig>
   );
 }

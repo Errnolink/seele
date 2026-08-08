@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { MediaFile, MetaPatch, ScanProgress } from "../src/scanner/types";
 import type { AppSettings } from "./settings";
 /** Tracks the previous scan's listener cleanup so a new scan removes them (v4 H-1). */
@@ -17,6 +17,14 @@ let activeScanCleanup: (() => void) | null = null;
 export interface ScanAPI {
   /** Open a native folder picker. Resolves to the path or `null`. */
   selectFolder(): Promise<string | null>;
+
+  /**
+   * Resolve the absolute path of a dropped/selected `File` via Electron's
+   * `webUtils.getPathForFile` — the supported replacement for the
+   * deprecated non-standard `File.path`. Returns `""` when the File has no
+   * backing path (e.g. a synthetic File); callers fall back to `File.path`.
+   */
+  getPathForFile(file: File): string;
 
   /**
    * Convert an absolute file path into a `media://` URL the renderer can
@@ -114,6 +122,7 @@ export interface ScanAPI {
 
 const api: ScanAPI = {
   selectFolder: () => ipcRenderer.invoke("dialog:selectFolder"),
+  getPathForFile: (file) => webUtils.getPathForFile(file),
 
   // Host is a fixed sentinel; the encoded absolute path goes in the
   // pathname so URL host parsing can't mangle Windows paths (#2).

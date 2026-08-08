@@ -8,6 +8,9 @@
  * it, so the user can see the effect before committing.
  */
 import { useEffect, useState } from "react";
+import { motion } from "motion/react";
+import { OVERLAY_ENTER, OVERLAY_EXIT, PANEL_ENTER, PANEL_EXIT } from "../motion";
+import { TargetingContainer } from "./TargetingContainer";
 import type { TagDef } from "../hooks/useTags";
 
 interface BatchTagDialogProps {
@@ -63,13 +66,23 @@ export function BatchTagDialog({
   };
 
   return (
-    <div
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1, transition: OVERLAY_ENTER }}
+      exit={{ opacity: 0, transition: OVERLAY_EXIT }}
       className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-md p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-lg border-2 border-nerv-lime bg-nerv-panel eva-cut shadow-[0_0_30px_rgba(201,233,138,0.3)]">
+      <TargetingContainer
+        label="BATCH TAGS"
+        color="lime"
+        initial={{ opacity: 0, y: 10, scale: 1.02 }}
+        animate={{ opacity: 1, y: 0, scale: 1, transition: PANEL_ENTER }}
+        exit={{ opacity: 0, y: 6, scale: 0.99, transition: PANEL_EXIT }}
+        className="w-full max-w-lg flex flex-col shadow-[0_0_30px_rgba(0,0,0,0.6)]"
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-nerv-border p-4">
           <div className="flex items-center gap-2">
@@ -163,8 +176,8 @@ export function BatchTagDialog({
             DONE
           </button>
         </div>
-      </div>
-    </div>
+      </TargetingContainer>
+    </motion.div>
   );
 }
 

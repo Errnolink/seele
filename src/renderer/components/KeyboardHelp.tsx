@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { motion } from "motion/react";
+import { OVERLAY_ENTER, OVERLAY_EXIT, PANEL_ENTER, PANEL_EXIT } from "../motion";
 
 export interface ShortcutEntry {
   keys: string[];
@@ -19,7 +21,6 @@ const SHORTCUTS: { section: string; entries: ShortcutEntry[] }[] = [
   {
     section: "View",
     entries: [
-      { keys: ["Ctrl", "F"], label: "Focus search" },
       { keys: ["?"], label: "Toggle this help" },
     ],
   },
@@ -58,11 +59,17 @@ export const KeyboardHelp: React.FC<KeyboardHelpProps> = ({ onClose }) => {
   }, [onClose]);
 
   return (
-    <div
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1, transition: OVERLAY_ENTER }}
+      exit={{ opacity: 0, transition: OVERLAY_EXIT }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-nerv-bg/80 backdrop-blur-sm"
       onClick={onClose}
     >
-      <div
+      <motion.div
+        initial={{ opacity: 0, y: 10, scale: 1.02 }}
+        animate={{ opacity: 1, y: 0, scale: 1, transition: PANEL_ENTER }}
+        exit={{ opacity: 0, y: 6, scale: 0.99, transition: PANEL_EXIT }}
         className="relative w-[420px] bg-nerv-panel border border-nerv-border bg-opacity-90 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -117,8 +124,8 @@ export const KeyboardHelp: React.FC<KeyboardHelpProps> = ({ onClose }) => {
         <div className="px-4 py-2 border-t border-nerv-border/40 text-[10px] text-nerv-muted/60 text-center">
           Press <span className="text-nerv-orange">Esc</span> to close
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };
 

@@ -22,17 +22,6 @@ export function formatDate(ts: number): string {
   return `${y}-${m}-${day}`;
 }
 
-/** Format an epoch-ms timestamp as a full date-time: `YYYY-MM-DD HH:MM:SS`. */
-export function formatDateTime(ts: number): string {
-  if (!ts || !Number.isFinite(ts)) return "unknown";
-  const d = new Date(ts);
-  const date = formatDate(ts);
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  const ss = String(d.getSeconds()).padStart(2, "0");
-  return `${date} ${hh}:${mm}:${ss}`;
-}
-
 /** Format an epoch-ms timestamp as a clock `HH:MM:SS` (header clock). */
 export function formatClock(ts: number): string {
   const d = new Date(ts);

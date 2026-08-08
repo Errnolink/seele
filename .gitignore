@@ -9,3 +9,4 @@ agents-reference/
 AGENTS.md
 # server-manager dev logs
 .server-logs/
+.servers.json

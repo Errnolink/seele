@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { motion } from "motion/react";
+import { OVERLAY_ENTER, OVERLAY_EXIT, PANEL_ENTER, PANEL_EXIT } from "../motion";
 import type { MediaFile } from "../types";
 import { formatBytes } from "../utils";
 
@@ -92,11 +94,17 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   };
 
   return (
-    <div
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1, transition: OVERLAY_ENTER }}
+      exit={{ opacity: 0, transition: OVERLAY_EXIT }}
       className="fixed inset-0 z-[80] flex items-start justify-center bg-black/80 p-4 pt-[12vh] backdrop-blur-sm"
       onClick={onClose}
     >
-      <div
+      <motion.div
+        initial={{ opacity: 0, y: 10, scale: 1.02 }}
+        animate={{ opacity: 1, y: 0, scale: 1, transition: PANEL_ENTER }}
+        exit={{ opacity: 0, y: 6, scale: 0.99, transition: PANEL_EXIT }}
         className="relative w-full max-w-2xl rounded-lg border border-nerv-orange/60 bg-nerv-panel shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -216,8 +224,8 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
             {results.length} results
           </span>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };
 

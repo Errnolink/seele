@@ -1,4 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { motion } from "motion/react";
+import { OVERLAY_ENTER, OVERLAY_EXIT, PANEL_ENTER, PANEL_EXIT } from "../motion";
+import { TargetingContainer } from "./TargetingContainer";
 import type { FolderNode } from "../types";
 
 export interface MoveDialogProps {
@@ -112,12 +115,20 @@ export const MoveDialog: React.FC<MoveDialogProps> = ({
   );
 
   return (
-    <div
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1, transition: OVERLAY_ENTER }}
+      exit={{ opacity: 0, transition: OVERLAY_EXIT }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
       onClick={onClose}
     >
-      <div
-        className="w-[520px] max-h-[75vh] flex flex-col bg-nerv-panel border border-nerv-orange/50 shadow-[0_0_30px_rgba(255,152,48,0.2)]"
+      <TargetingContainer
+        label="MOVE"
+        color="orange"
+        initial={{ opacity: 0, y: 10, scale: 1.02 }}
+        animate={{ opacity: 1, y: 0, scale: 1, transition: PANEL_ENTER }}
+        exit={{ opacity: 0, y: 6, scale: 0.99, transition: PANEL_EXIT }}
+        className="w-[520px] max-h-[75vh] flex flex-col shadow-[0_0_30px_rgba(0,0,0,0.6)]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -231,8 +242,8 @@ export const MoveDialog: React.FC<MoveDialogProps> = ({
             MOVE
           </button>
         </div>
-      </div>
-    </div>
+      </TargetingContainer>
+    </motion.div>
   );
 };
 

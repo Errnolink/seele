@@ -18,11 +18,6 @@ export type ScanStatus = "idle" | "scanning" | "done" | "error" | "cancelled";
 export interface ScanState {
   /** Append-only accumulated batches. Appending is O(batch), not O(total). */
   batches: MediaFile[][];
-  /**
-   * Bumped on every batch append so consumers can depend on it without
-   * holding the (memoized) flat array reference in their deps.
-   */
-  filesVersion: number;
   /** Running total across all batches — cheap, avoids flattening for `.length`. */
   count: number;
   status: ScanStatus;
@@ -47,7 +42,6 @@ type ScanAction =
 
 const initialState: ScanState = {
   batches: [],
-  filesVersion: 0,
   count: 0,
   status: "idle",
   progress: null,
@@ -68,7 +62,6 @@ function scanReducer(state: ScanState, action: ScanAction): ScanState {
       return {
         ...initialState,
         batches: restored.length > 0 ? [restored] : [],
-        filesVersion: restored.length > 0 ? 1 : 0,
         count: restored.length,
         status: "done",
       };
@@ -80,7 +73,6 @@ function scanReducer(state: ScanState, action: ScanAction): ScanState {
       return {
         ...state,
         batches: [...state.batches, action.files],
-        filesVersion: state.filesVersion + 1,
         count: state.count + action.files.length,
       };
     }
@@ -120,7 +112,6 @@ function scanReducer(state: ScanState, action: ScanAction): ScanState {
       return {
         ...state,
         batches: nextBatches,
-        filesVersion: state.filesVersion + 1,
       };
     }
     case "progress":
@@ -157,7 +148,6 @@ function scanReducer(state: ScanState, action: ScanAction): ScanState {
       return {
         ...state,
         batches: nextBatches,
-        filesVersion: state.filesVersion + 1,
         count: Math.max(0, state.count - actualRemoved),
       };
     }
@@ -170,7 +160,6 @@ function scanReducer(state: ScanState, action: ScanAction): ScanState {
       return {
         ...state,
         batches: [...state.batches, action.files],
-        filesVersion: state.filesVersion + 1,
         count: state.count + action.files.length,
       };
     }
