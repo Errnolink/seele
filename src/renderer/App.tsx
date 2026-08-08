@@ -20,13 +20,15 @@ import SessionChangesModal from "./components/SessionChangesModal";
 import TrashQueueModal from "./components/TrashQueueModal";
 import SettingsModal from "./components/SettingsModal";
 import { useToast } from "./components/useToast";
-import { DEFAULT_SETTINGS } from "./settingsDefaults";
-import type { AppSettings } from "../../electron/settings";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { formatBytes } from "./utils";
 import { LARGE_FILE_BYTES } from "./types";
 import { useScanState } from "./hooks/useScanState";
 import { useTags } from "./hooks/useTags";
+import { useSettings } from "./hooks/useSettings";
+import { useFavorites } from "./hooks/useFavorites";
+import { useSelection } from "./hooks/useSelection";
+import { useHiddenFolders } from "./hooks/useHiddenFolders";
 import type {
   FolderNode,
   GroupMode,
@@ -38,7 +40,6 @@ import type {
   ViewMode,
 } from "./types";
 import type { ScanProgress } from "../scanner/types";
-import type { MediaId } from "./types";
 
 const SEARCH_DEBOUNCE_MS = 200;
 
@@ -157,32 +158,8 @@ export default function App() {
   const { addToast } = useToast();
 
   // ---- settings (performance knobs — issues.md item 6) ----
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const { settings, updateSettings } = useSettings();
   const [showSettings, setShowSettings] = useState(false);
-  // Load persisted settings on mount. On a true first launch (no file on
-  // disk), adopt the OS-level reduced-motion preference as the default
-  // and persist it so it survives restarts.
-  useEffect(() => {
-    void window.scanAPI.getSettings().then((res) => {
-      if (
-        !res.exists &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      ) {
-        setSettings({ ...res.settings, reduceMotion: true });
-        void window.scanAPI.setSettings({ reduceMotion: true });
-      } else {
-        setSettings(res.settings);
-      }
-    }).catch(() => {
-      /* defaults already in state — best-effort */
-    });
-  }, []);
-  const updateSettings = useCallback((patch: Partial<AppSettings>) => {
-    setSettings((prev) => ({ ...prev, ...patch }));
-    void window.scanAPI.setSettings(patch).catch(() => {
-      /* main also clamps — best-effort */
-    });
-  }, []);
 
   // ---- core state ----
   const [booted, setBooted] = useState(false);
@@ -201,35 +178,25 @@ export default function App() {
   // deferred value coalesces intermediate positions so the pack recomputes
   // at most once per frame while the label still updates live.
   const packedDensity = useDeferredValue(gridDensity);
-  /** Folders hidden from the grid via context menu (subtree match).
-   * Persisted to localStorage (same pattern as tags) so hides survive restarts. */
-  const [hiddenFolders, setHiddenFolders] = useState<Set<string>>(() => {
-    try {
-      const raw = localStorage.getItem("wiergise:hiddenFolders");
-      if (raw) {
-        const parsed = JSON.parse(raw) as unknown;
-        if (Array.isArray(parsed)) return new Set(parsed.filter((p) => typeof p === "string"));
-      }
-    } catch {
-      /* corrupt entry — start empty */
-    }
-    return new Set();
-  });
-  useEffect(() => {
-    localStorage.setItem("wiergise:hiddenFolders", JSON.stringify([...hiddenFolders]));
-  }, [hiddenFolders]);
-  const toggleHideFolder = useCallback((folderPath: string) => {
-    setHiddenFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(folderPath)) next.delete(folderPath);
-      else next.add(folderPath);
-      return next;
-    });
-  }, []);
+  const { hiddenFolders, toggleHideFolder } = useHiddenFolders();
 
   // ---- selection + favorites ----
-  const [selectedIds, setSelectedIds] = useState<Set<MediaId>>(new Set());
-  const [favorites, setFavorites] = useState<Set<MediaId>>(new Set());
+  const { selectedIds, toggleSelect, clearSelection, removeMany: removeManySelected } =
+    useSelection();
+  const { favorites, toggleFavorite: toggleFavoriteBase, toggleFavoriteMany } =
+    useFavorites();
+  /** Wrapper that toasts — `adding` is computed outside the updater
+   * (StrictMode-safe; no side effects inside setFavorites). */
+  const toggleFavorite = useCallback(
+    (file: MediaFile) => {
+      const adding = toggleFavoriteBase(file);
+      addToast({
+        message: adding ? "ADDED TO FAVORITES" : "REMOVED FROM FAVORITES",
+        variant: adding ? "success" : "info",
+      });
+    },
+    [toggleFavoriteBase, addToast],
+  );
 
   // ---- overlays ----
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
@@ -396,48 +363,6 @@ export default function App() {
     [onReset, onRestore],
   );
 
-  // ---- selection ----
-  const toggleSelect = useCallback((filePath: string, e: React.MouseEvent) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (e.ctrlKey || e.metaKey) {
-        // toggle
-        if (next.has(filePath)) next.delete(filePath);
-        else next.add(filePath);
-      } else if (e.shiftKey) {
-        // additive
-        next.add(filePath);
-      } else {
-        // plain click → exclusive select
-        next.clear();
-        next.add(filePath);
-      }
-      return next;
-    });
-  }, []);
-
-  const clearSelection = useCallback(() => {
-    setSelectedIds(new Set());
-  }, []);
-
-  // ---- favorites ----
-  const toggleFavorite = useCallback(
-    (file: MediaFile) => {
-      const adding = !favorites.has(file.filePath);
-      setFavorites((prev) => {
-        const next = new Set(prev);
-        if (next.has(file.filePath)) next.delete(file.filePath);
-        else next.add(file.filePath);
-        return next;
-      });
-      addToast({
-        message: adding ? "ADDED TO FAVORITES" : "REMOVED FROM FAVORITES",
-        variant: adding ? "success" : "info",
-      });
-    },
-    [favorites, addToast],
-  );
-
   // ---- file operations (organize & move) ----
 
   /** State for the in-app move dialog: null = closed, or the file paths to move. */
@@ -519,11 +444,7 @@ export default function App() {
       // (ui-upgrade.md Issue 2B).
       advanceViewer(moved);
       onRemoveFiles(moved);
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        for (const p of moved) next.delete(p);
-        return next;
-      });
+      removeManySelected(moved);
     }
     const destName = destDir.split(/[\\/]/).pop() || destDir;
     const okCount = results.filter((r) => r.ok).length;
@@ -544,7 +465,7 @@ export default function App() {
       message: okCount > 0 ? `MOVED ${okCount === 1 ? "1 FILE" : `${okCount} FILES`} → ${destName.toUpperCase()}` : `MOVE FAILED — ${destName.toUpperCase()}`,
       variant: okCount > 0 ? "success" : "error",
     });
-  }, [moveDialogPaths, onRemoveFiles, logActivity, advanceViewer, addToast]);
+  }, [moveDialogPaths, onRemoveFiles, logActivity, advanceViewer, addToast, removeManySelected]);
 
   /** Move files to a specific known directory (sidebar drop / quick move). */
   const handleMoveToDir = useCallback(async (filePaths: string[], destDir: string) => {
@@ -556,11 +477,7 @@ export default function App() {
     if (moved.size > 0) {
       advanceViewer(moved);
       onRemoveFiles(moved);
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        for (const p of moved) next.delete(p);
-        return next;
-      });
+      removeManySelected(moved);
     }
     const destName = destDir.split(/[\\/]/).pop() || destDir;
     const okCount = results.filter((r) => r.ok).length;
@@ -574,7 +491,7 @@ export default function App() {
       message: okCount > 0 ? `MOVED ${okCount === 1 ? "1 FILE" : `${okCount} FILES`} → ${destName.toUpperCase()}` : `MOVE FAILED — ${destName.toUpperCase()}`,
       variant: okCount > 0 ? "success" : "error",
     });
-  }, [onRemoveFiles, logActivity, advanceViewer, addToast]);
+  }, [onRemoveFiles, logActivity, advanceViewer, addToast, removeManySelected]);
 
   /** Stage files for trash — removes them from the grid, nothing on disk. */
   const queueForTrash = useCallback((filesToQueue: MediaFile[]) => {
@@ -604,8 +521,8 @@ export default function App() {
     if (selectedIds.size === 0) return;
     const queued = derivedFilesRef.current.filter((f) => selectedIds.has(f.filePath));
     queueForTrash(queued);
-    setSelectedIds(new Set());
-  }, [selectedIds, queueForTrash]);
+    clearSelection();
+  }, [selectedIds, queueForTrash, clearSelection]);
 
   /** Pull a staged file back into the grid — no disk operation ever happened. */
   const restoreFromQueue = useCallback((filePath: string) => {
@@ -1610,14 +1527,7 @@ export default function App() {
               const picked = derivedFiles
                 .filter((f) => selectedIds.has(f.filePath))
                 .map((f) => f.filePath);
-              setFavorites((prev) => {
-                const next = new Set(prev);
-                for (const p of picked) {
-                  if (next.has(p)) next.delete(p);
-                  else next.add(p);
-                }
-                return next;
-              });
+              toggleFavoriteMany(picked);
             }}
           >
             <span className="text-nerv-amber text-xs">★</span>
