@@ -23,6 +23,10 @@ export interface AppSettings {
   decodeConcurrency: number;
   /** Masonry overscan band in px (scroll buffer). */
   overscan: number;
+  /** Library roots: absolute paths of folders the user wants merged into
+   *  one browsable library. The main process watches these for changes
+   *  (Syncthing syncs) and the renderer merges their scans. */
+  roots: string[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -30,6 +34,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dialogBlur: true,
   decodeConcurrency: 4,
   overscan: 600,
+  roots: [],
 };
 
 const SETTINGS_FILENAME = "settings.json";
@@ -73,12 +78,30 @@ function load(): void {
         DEFAULT_SETTINGS.decodeConcurrency,
       ),
       overscan: clampNumber(parsed.overscan, 100, 1200, DEFAULT_SETTINGS.overscan),
+      roots: readRoots(parsed.roots),
     };
   } catch {
     // Corrupt or missing — keep defaults.
     current = { ...DEFAULT_SETTINGS };
     exists = false;
   }
+}
+
+/** Validate a raw `roots` value into a deduped, non-empty string list.
+ *  Paths keep their original case (display); main normalizes for
+ *  comparisons via its platform-aware `normalizeRoot`. */
+function readRoots(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of v) {
+    if (typeof item !== "string" || item.length === 0) continue;
+    const norm = item.replace(/[\\/]+$/, "");
+    if (norm.length === 0 || seen.has(norm)) continue;
+    seen.add(norm);
+    out.push(norm);
+  }
+  return out;
 }
 
 /** Atomically write the settings file. Tiny + rare, sync is fine. */
@@ -123,6 +146,7 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
       typeof patch.overscan === "number"
         ? clampNumber(patch.overscan, 100, 1200, current.overscan)
         : current.overscan,
+    roots: patch.roots !== undefined ? readRoots(patch.roots) : current.roots,
   };
   current = next;
   persist();

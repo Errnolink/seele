@@ -9,15 +9,22 @@
  *
  * Folder expansion state is LOCAL to this panel (a `Set<string>` of paths).
  */
-import { memo, useDeferredValue, useMemo, useState, type ReactNode } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { FolderNode, MediaTypeFilter, ScanStats } from "../types";
 import type { TagDef } from "../hooks/useTags";
+import type { RootScanState } from "../hooks/useScanState";
 import { formatBytes, pad } from "../utils";
 
 export interface SidebarProps {
   open: boolean;
   tree: FolderNode | null;
   totalFolders: number;
+  /** Library roots (settings.roots) — listed in the LIBRARY ROOTS section. */
+  roots: string[];
+  onAddRoot: () => void;
+  onRemoveRoot: (root: string) => void;
+  /** Per-root scan state, for the status dot next to each root. */
+  rootStates: Record<string, RootScanState>;
   selectedFolder: string | null;
   onSelectFolder: (p: string | null) => void;
   /** Folders hidden from the grid (grayed out in the tree). */
@@ -55,6 +62,16 @@ const QUICK_VIEWS: QuickView[] = [
   { key: "video", label: "VIDEO" },
   { key: "favorite", label: "STARRED" },
 ];
+
+/* ------------------- Directory panel splitter --------------------- */
+
+const DIR_MIN_HEIGHT = 120;
+const DIR_DEFAULT_FRACTION = 0.4;
+const DIR_MAX_FRACTION = 0.7;
+const DIR_SPLIT_KEY = "wiergise:dirSplit";
+
+const clampDirHeight = (px: number, max: number) =>
+  Math.min(Math.max(px, DIR_MIN_HEIGHT), Math.max(max, DIR_MIN_HEIGHT));
 
 /* --------------------------- SectionLabel helper -------------------------- */
 
@@ -186,7 +203,10 @@ const FolderTreeNode = memo(function FolderTreeNode({
 }: FolderTreeNodeProps) {
   const hasChildren = node.children.length > 0;
   const isOpen = expanded.has(node.path);
-  const selected = selectedFolder === node.path;
+  const isLibrary = node.path === "";
+  const selected = isLibrary
+    ? selectedFolder === null
+    : selectedFolder === node.path;
   const [isDropTarget, setIsDropTarget] = useState(false);
   const isHidden = hiddenFolders?.has(node.path) ?? false;
 
@@ -194,11 +214,25 @@ const FolderTreeNode = memo(function FolderTreeNode({
     <div>
       <div
         role="treeitem"
+        tabIndex={-1}
         aria-expanded={hasChildren ? isOpen : undefined}
         aria-selected={selected}
+        aria-level={depth + 1}
         onClick={() =>
-          onSelectFolder(selected ? null : node.path)
+          onSelectFolder(isLibrary || selected ? null : node.path)
         }
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onSelectFolder(isLibrary || selected ? null : node.path);
+          } else if (e.key === "ArrowRight" && hasChildren && !isOpen) {
+            e.preventDefault();
+            onToggleExpand(node.path);
+          } else if (e.key === "ArrowLeft" && hasChildren && isOpen) {
+            e.preventDefault();
+            onToggleExpand(node.path);
+          }
+        }}
         onDoubleClick={(e) => {
           if (hasChildren) {
             e.stopPropagation();
@@ -206,12 +240,13 @@ const FolderTreeNode = memo(function FolderTreeNode({
           }
         }}
         onContextMenu={(e) => {
+          if (isLibrary) return;
           e.preventDefault();
           e.stopPropagation();
           onFolderContextMenu?.(node.path, e.clientX, e.clientY);
         }}
         onDragOver={(e) => {
-          if (onDropFiles && selectedIds && selectedIds.size > 0) {
+          if (!isLibrary && onDropFiles && selectedIds && selectedIds.size > 0) {
             e.preventDefault();
             setIsDropTarget(true);
           }
@@ -220,7 +255,7 @@ const FolderTreeNode = memo(function FolderTreeNode({
         onDrop={(e) => {
           e.preventDefault();
           setIsDropTarget(false);
-          if (onDropFiles && selectedIds && selectedIds.size > 0) {
+          if (!isLibrary && onDropFiles && selectedIds && selectedIds.size > 0) {
             onDropFiles([...selectedIds], node.path);
           }
         }}
@@ -290,7 +325,9 @@ const FolderTreeNode = memo(function FolderTreeNode({
       </div>
 
       {hasChildren && isOpen && (
-        <div>
+        // A `treeitem`'s children must sit in a `group`, or the row's
+        // level/position is undefined to assistive tech.
+        <div role="group">
           {node.children.map((child) => (
             <FolderTreeNode
               key={child.path}
@@ -308,6 +345,99 @@ const FolderTreeNode = memo(function FolderTreeNode({
               onFolderContextMenu={onFolderContextMenu}
             />
           ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
+/* --------------------------- Library roots ---------------------------- */
+
+const STATUS_DOT: Record<RootScanState["status"], string> = {
+  scanning: "bg-nerv-amber animate-pulse-soft shadow-[0_0_6px_#ffb700]",
+  done: "bg-nerv-lime shadow-[0_0_6px_#c9e98a]",
+  error: "bg-nerv-red shadow-[0_0_6px_#ff6b6b]",
+  idle: "bg-nerv-muted",
+  cancelled: "bg-nerv-amber",
+};
+
+interface LibraryRootsProps {
+  roots: string[];
+  rootStates: Record<string, RootScanState>;
+  onAddRoot: () => void;
+  onRemoveRoot: (root: string) => void;
+  onSelectFolder: (p: string | null) => void;
+}
+
+const LibraryRoots = memo(function LibraryRoots({
+  roots,
+  rootStates,
+  onAddRoot,
+  onRemoveRoot,
+  onSelectFolder,
+}: LibraryRootsProps) {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <div className="border-b border-nerv-border/60 flex flex-col">
+      {/* Collapsible header */}
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className="flex items-center gap-2 px-3 py-2 hover:bg-nerv-panel-2/50 transition-colors w-full"
+      >
+        <span
+          className={`text-[9px] text-nerv-muted transition-transform ${
+            collapsed ? "" : "rotate-90"
+          }`}
+        >
+          ▸
+        </span>
+        <span className="text-[9px] font-bold tracking-[0.25em] text-nerv-amber">
+          LIBRARY ROOTS
+        </span>
+        <span className="h-px flex-1 bg-gradient-to-r from-nerv-amber/40 to-transparent" />
+        <span className="text-[9px] font-mono text-nerv-muted tabular-nums">
+          {roots.length}
+        </span>
+      </button>
+
+      {!collapsed && (
+        <div className="px-3 pb-3 flex flex-col gap-1.5">
+          {roots.map((root) => {
+            const name = root.split(/[\\/]/).filter(Boolean).pop() ?? root;
+            const status = rootStates[root]?.status ?? "idle";
+            return (
+              <div key={root} className="group/root flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onSelectFolder(root)}
+                  title={root}
+                  className="flex-1 flex items-center gap-2 h-7 px-2 text-[10px] font-bold tracking-wider text-nerv-text-dim hover:text-nerv-lime transition-colors min-w-0"
+                >
+                  <span
+                    className={`w-1.5 h-1.5 shrink-0 rounded-full ${STATUS_DOT[status]}`}
+                  />
+                  <span className="flex-1 truncate text-left">{name.toUpperCase()}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRemoveRoot(root)}
+                  className="opacity-0 group-hover/root:opacity-100 text-nerv-muted hover:text-nerv-red text-[10px] font-mono w-4 h-4 flex items-center justify-center transition-opacity"
+                  title="Remove root from library"
+                >
+                  {"\u2715"}
+                </button>
+              </div>
+            );
+          })}
+          <button
+            type="button"
+            onClick={onAddRoot}
+            className="mt-1 flex items-center gap-1.5 h-7 px-2 text-[10px] font-mono text-nerv-muted hover:text-nerv-orange transition-colors"
+          >
+            <span className="text-[12px] leading-none">+</span>
+            <span className="tracking-wider">ADD ROOT</span>
+          </button>
         </div>
       )}
     </div>
@@ -347,6 +477,34 @@ const DirectoryExplorer = memo(function DirectoryExplorer({
   const filter = useDeferredValue(filterRaw.trim().toLowerCase());
   // Filter input collapses to a magnifier by default; expands on click.
   const [searchOpen, setSearchOpen] = useState(false);
+
+  // Auto-expand the synthetic LIBRARY root (path "") once, so the per-root
+  // volumes are visible without manual expansion. Guarded by a ref rather
+  // than by `!expanded.has("")`: the old condition re-fired on every
+  // `expanded` change, so "COL" (collapse all) instantly re-expanded the
+  // root and the button looked broken.
+  const autoExpandedRef = useRef(false);
+  useEffect(() => {
+    if (autoExpandedRef.current) return;
+    if (tree && tree.path === "") {
+      autoExpandedRef.current = true;
+      setExpanded((prev) => new Set(prev).add(""));
+    }
+  }, [tree, setExpanded]);
+
+  /** Stable identity — FolderTreeNode is `memo`ized and recurses over the
+   *  whole tree; an inline arrow re-rendered every row on each keystroke
+   *  in the filter box. */
+  const toggleExpand = useCallback(
+    (p: string) =>
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (next.has(p)) next.delete(p);
+        else next.add(p);
+        return next;
+      }),
+    [setExpanded],
+  );
 
   /** Collect every descendant path under `node` (inclusive). */
   const collectPaths = (node: FolderNode): string[] => {
@@ -457,7 +615,7 @@ const DirectoryExplorer = memo(function DirectoryExplorer({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2">
+      <div className="flex-1 min-h-0 overflow-y-auto p-2" role="tree" aria-label="Directory tree">
         {visible ? (
           <FolderTreeNode
             node={visible.tree}
@@ -465,14 +623,7 @@ const DirectoryExplorer = memo(function DirectoryExplorer({
             expanded={
               filter ? new Set([...expanded, ...visible.forced]) : expanded
             }
-            onToggleExpand={(p) =>
-              setExpanded((prev) => {
-                const next = new Set(prev);
-                if (next.has(p)) next.delete(p);
-                else next.add(p);
-                return next;
-              })
-            }
+            onToggleExpand={toggleExpand}
             selectedFolder={selectedFolder}
             onSelectFolder={onSelectFolder}
             filter={filter}
@@ -548,7 +699,7 @@ const TagSection = memo(function TagSection({
 
       {/* Tag pills */}
       {!collapsed && (
-        <div className="px-3 pb-3 flex flex-col gap-1.5">
+        <div className="px-3 pb-3 flex flex-col gap-1.5 max-h-36 overflow-y-auto">
           {tags.map((tag) => {
             const active = activeTags.has(tag.key);
             const count = tagCounts.get(tag.key) ?? 0;
@@ -663,11 +814,14 @@ const StorageTelemetry = memo(function StorageTelemetry({
 }) {
   const img = stats.imageCount;
   const vid = stats.videoCount;
-  const total = Math.max(1, img + vid); // avoid divide-by-zero
+  const total = img + vid;
 
   // Segmented ratio bar: cyan images + green videos, proportional widths.
-  const imgPct = (img / total) * 100;
-  const vidPct = 100 - imgPct;
+  // With an empty library the old `Math.max(1, total)` guard made imgPct 0
+  // and vidPct 100 — a full green "all video" bar for a library holding
+  // nothing. Both segments collapse to 0 instead.
+  const imgPct = total > 0 ? (img / total) * 100 : 0;
+  const vidPct = total > 0 ? 100 - imgPct : 0;
 
   // Tick marks every 10px across the bar (overdrawn, decorative).
   const ticks = useMemo(() => {
@@ -731,6 +885,10 @@ function SidebarInner({
   open,
   tree,
   totalFolders,
+  roots,
+  onAddRoot,
+  onRemoveRoot,
+  rootStates,
   selectedFolder,
   hiddenFolders,
   onSelectFolder,
@@ -750,15 +908,63 @@ function SidebarInner({
 }: SidebarProps) {
   // Folder expansion state is LOCAL to the sidebar.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const sidebarRef = useRef<HTMLElement>(null);
+  const [dirHeight, setDirHeight] = useState<number | null>(null);
+
+  // Collapsing the sidebar only zeroes its width — every control inside
+  // stayed in the tab order and in the accessibility tree, so tabbing out
+  // of the header walked through ~40 invisible buttons. `inert` drops the
+  // whole subtree from focus and AT. Set imperatively: React 18 has no
+  // `inert` prop and renders `inert="false"` as truthy-present markup.
+  useEffect(() => {
+    const el = sidebarRef.current;
+    if (el) el.inert = !open;
+  }, [open]);
+
+  // Restore the persisted directory height once the sidebar is measured;
+  // default to 40% of the sidebar height, clamped to the allowed range.
+  useLayoutEffect(() => {
+    const root = sidebarRef.current;
+    if (!root) return;
+    const max = Math.floor(root.clientHeight * DIR_MAX_FRACTION);
+    const fallback = Math.floor(root.clientHeight * DIR_DEFAULT_FRACTION);
+    const saved = localStorage.getItem(DIR_SPLIT_KEY);
+    const parsed = saved === null ? NaN : Number(saved);
+    setDirHeight(
+      clampDirHeight(Number.isFinite(parsed) ? parsed : fallback, max),
+    );
+  }, []);
+
+  // Pointer-drag resizes the directory panel; each move clamps the height
+  // and persists it so the position survives restarts.
+  const onSplitterPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dirHeight === null || !sidebarRef.current) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = dirHeight;
+    const max = Math.floor(sidebarRef.current.clientHeight * DIR_MAX_FRACTION);
+    const onMove = (ev: PointerEvent) => {
+      const next = clampDirHeight(startHeight + (ev.clientY - startY), max);
+      setDirHeight(next);
+      localStorage.setItem(DIR_SPLIT_KEY, String(Math.round(next)));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
 
   return (
     <aside
+      ref={sidebarRef}
       className={`shrink-0 h-full transition-[width] duration-300 overflow-hidden ${
         open ? "w-64" : "w-0"
       } border-r border-nerv-border/60 bg-nerv-panel`}
       aria-label="Sidebar"
     >
-      <div className="w-64 h-full flex flex-col">
+      <div className="w-64 h-full min-h-0 flex flex-col overflow-y-auto">
         <QuickViews
           typeFilter={typeFilter}
           onTypeFilterChange={onTypeFilterChange}
@@ -767,18 +973,41 @@ function SidebarInner({
           favoriteCount={favoriteCount}
         />
 
-        <DirectoryExplorer
-          tree={tree}
-          totalFolders={totalFolders}
-          hiddenFolders={hiddenFolders}
-          selectedFolder={selectedFolder}
+        <LibraryRoots
+          roots={roots}
+          rootStates={rootStates}
+          onAddRoot={onAddRoot}
+          onRemoveRoot={onRemoveRoot}
           onSelectFolder={onSelectFolder}
-          expanded={expanded}
-          setExpanded={setExpanded}
-          onDropFiles={onDropFiles}
-          selectedIds={selectedIds}
-          onFolderContextMenu={onFolderContextMenu}
         />
+
+        <div
+          className="min-h-0 shrink-0 flex flex-col"
+          style={{ height: dirHeight ?? undefined }}
+        >
+          <DirectoryExplorer
+            tree={tree}
+            totalFolders={totalFolders}
+            hiddenFolders={hiddenFolders}
+            selectedFolder={selectedFolder}
+            onSelectFolder={onSelectFolder}
+            expanded={expanded}
+            setExpanded={setExpanded}
+            onDropFiles={onDropFiles}
+            selectedIds={selectedIds}
+            onFolderContextMenu={onFolderContextMenu}
+          />
+        </div>
+
+        {/* Drag to resize the directory panel above. */}
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          onPointerDown={onSplitterPointerDown}
+          className="group relative h-2 shrink-0 cursor-ns-resize touch-none select-none"
+        >
+          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-nerv-border group-hover:bg-nerv-orange/80 group-active:bg-nerv-orange transition-colors" />
+        </div>
 
         {/* Classification Tags — v2.5 §Module 3.3 */}
         {tags && (

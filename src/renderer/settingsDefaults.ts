@@ -11,4 +11,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dialogBlur: true,
   decodeConcurrency: 4,
   overscan: 600,
+  roots: [],
 };

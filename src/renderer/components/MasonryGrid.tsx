@@ -164,12 +164,17 @@ const MediaCard = memo(function MediaCard({
     <div
       role="button"
       tabIndex={0}
-      onClick={(e) => {
-        // Single click inspects in split; opens the lightbox otherwise.
-        onInspect(file);
-        void e;
-      }}
+      // Single click inspects in split; opens the lightbox otherwise.
+      onClick={() => onInspect(file)}
       onDoubleClick={() => onOpen(file)}
+      // The tile advertises `role="button"` and takes tab focus, but had no
+      // key handler — keyboard users could focus a tile and not open it.
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(file);
+        }
+      }}
       onContextMenu={(e) => onContextMenu(file, e)}
       draggable
       onDragStart={(e) => {
@@ -624,7 +629,10 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
       return { sections: [] as ListSection[], totalHeight: 0 };
     }
     const sections: ListSection[] = [];
-    let cursorY = 0;
+    // Reserve the column-header strip. Rows used to start at y=0, i.e.
+    // directly underneath the header, which covered the first row of the
+    // first group whenever grouping was off.
+    let cursorY = HEADER_HEIGHT;
     for (const span of groupSpans) {
       const startY = cursorY;
       const headerOffset = showGroups ? HEADER_HEIGHT + GAP : 0;
@@ -798,15 +806,19 @@ const MasonryView = memo(function MasonryView({
   const top = scrollTop - overscan;
   const bottom = scrollTop + viewportHeight + overscan;
 
-  // Visible headers.
+  // Visible headers. Keyed by section index, not by label: grouping by
+  // directory or resolution routinely produces two sections with the same
+  // label (`Camera` under two roots, `1920x1080` in two date buckets), and
+  // a duplicate React key made one of them vanish or render at the wrong
+  // offset.
   const visibleHeaders = useMemo(() => {
-    if (!showGroups) return [] as Array<{ label: string; count: number; y: number }>;
-    const out: Array<{ label: string; count: number; y: number }> = [];
-    for (const s of sections) {
+    if (!showGroups) return [] as Array<{ key: number; label: string; count: number; y: number }>;
+    const out: Array<{ key: number; label: string; count: number; y: number }> = [];
+    sections.forEach((s, i) => {
       if (s.offsetY >= top && s.offsetY <= bottom) {
-        out.push({ label: s.label!, count: s.count, y: s.offsetY });
+        out.push({ key: i, label: s.label!, count: s.count, y: s.offsetY });
       }
-    }
+    });
     return out;
   }, [sections, top, bottom, showGroups]);
 
@@ -840,7 +852,7 @@ const MasonryView = memo(function MasonryView({
     <div className="relative w-full animate-fade-in" style={{ height: `${totalHeight}px` }}>
       {visibleHeaders.map((h) => (
         <div
-          key={`hdr-${h.label}`}
+          key={`hdr-${h.key}`}
           className="absolute left-0 w-full"
           style={{ top: `${h.y}px`, height: `${HEADER_HEIGHT}px` }}
         >
@@ -936,17 +948,20 @@ const GridView = memo(function GridView({
 
   // Visible headers + per-section visible row windows.
   const visible = useMemo(() => {
-    const headers: Array<{ label: string; count: number; y: number }> = [];
+    // Section index (not label) keys both headers and rows — two sections
+    // can share a label under `folder` / `resolution` grouping.
+    const headers: Array<{ key: number; label: string; count: number; y: number }> = [];
     const rows: Array<{
       section: GridSection;
       rowIdx: number;
       y: number;
       files: MediaFile[];
     }> = [];
-    for (const section of sections) {
+    sections.forEach((section, sectionIdx) => {
       const headerOffset = showGroups ? HEADER_HEIGHT + GAP : 0;
       if (showGroups && section.offsetY >= top && section.offsetY <= bottom) {
         headers.push({
+          key: sectionIdx,
           label: section.label,
           count: section.count,
           y: section.offsetY,
@@ -977,7 +992,7 @@ const GridView = memo(function GridView({
           files: allFiles.slice(startFileIdx, endFileIdx),
         });
       }
-    }
+    });
     return { headers, rows };
   }, [sections, allFiles, top, bottom, showGroups]);
 
@@ -990,7 +1005,7 @@ const GridView = memo(function GridView({
     <div className="relative w-full animate-fade-in" style={{ height: `${totalHeight}px` }}>
       {visible.headers.map((h) => (
         <div
-          key={`hdr-${h.label}`}
+          key={`hdr-${h.key}`}
           className="absolute left-0 w-full"
           style={{ top: `${h.y}px`, height: `${HEADER_HEIGHT + GAP}px` }}
         >
@@ -999,7 +1014,7 @@ const GridView = memo(function GridView({
       ))}
       {visible.rows.map(({ section, rowIdx, y, files }) => (
         <div
-          key={`${section.label}-${rowIdx}`}
+          key={`${section.start}-${rowIdx}`}
           className="absolute flex"
           style={{
             top: `${y}px`,
@@ -1082,12 +1097,13 @@ const ListView = memo(function ListView({
   const bottom = scrollTop + viewportHeight + overscan;
 
   const visible = useMemo(() => {
-    const headers: Array<{ label: string; count: number; y: number }> = [];
+    // Keyed by section index — labels repeat under folder/resolution grouping.
+    const headers: Array<{ key: number; label: string; count: number; y: number }> = [];
     const rows: Array<{ file: MediaFile; y: number }> = [];
-    for (const section of sections) {
+    sections.forEach((section, sectionIdx) => {
       const headerOffset = showGroups ? HEADER_HEIGHT + GAP : 0;
       if (showGroups && section.offsetY >= top && section.offsetY <= bottom) {
-        headers.push({ label: section.label, count: section.count, y: section.offsetY });
+        headers.push({ key: sectionIdx, label: section.label, count: section.count, y: section.offsetY });
       }
       const rowsStartY = section.offsetY + headerOffset;
       // Uniform rows — arithmetic window instead of scanning all rows.
@@ -1103,7 +1119,7 @@ const ListView = memo(function ListView({
         const rowY = rowsStartY + r * LIST_ROW_H;
         rows.push({ file: allFiles[section.start + r], y: rowY });
       }
-    }
+    });
     return { headers, rows };
   }, [sections, allFiles, top, bottom, showGroups]);
 
@@ -1114,10 +1130,12 @@ const ListView = memo(function ListView({
 
   return (
     <div className="relative w-full animate-fade-in" style={{ height: `${totalHeight}px` }}>
-      {/* Sticky-ish column header at the top of the scroll area */}
+      {/* Column header. In-flow + `sticky` (not absolute) so it stays
+          pinned while the virtualized rows scroll under it; the list
+          packer reserves HEADER_HEIGHT of space for it. */}
       <div
-        className="absolute left-0 right-0 z-10 flex items-center bg-nerv-panel text-nerv-muted text-[10px] font-mono font-normal border-b border-nerv-border"
-        style={{ top: 0, height: `${HEADER_HEIGHT}px`, paddingLeft: `${PADDING}px`, paddingRight: `${PADDING}px` }}
+        className="sticky top-0 z-10 flex items-center bg-nerv-panel text-nerv-muted text-[10px] font-mono font-normal border-b border-nerv-border"
+        style={{ height: `${HEADER_HEIGHT}px`, paddingLeft: `${PADDING}px`, paddingRight: `${PADDING}px` }}
       >
         <span className="w-8" />
         <span className="w-12">PREV</span>
@@ -1133,7 +1151,7 @@ const ListView = memo(function ListView({
       {/* Group headers — positioned at each section's offsetY */}
       {visible.headers.map((h) => (
         <div
-          key={`hdr-${h.label}`}
+          key={`hdr-${h.key}`}
           className="absolute left-0 w-full"
           style={{ top: `${h.y}px`, height: `${HEADER_HEIGHT + GAP}px` }}
         >
@@ -1173,6 +1191,12 @@ const ListView = memo(function ListView({
               <input
                 type="checkbox"
                 checked={selected}
+                aria-label={`Select ${file.fileName}`}
+                // Selection semantics need the modifier keys off the mouse
+                // event, so onClick owns the toggle. React still requires
+                // `readOnly` alongside `checked` or it logs an
+                // uncontrolled-input warning for every visible row.
+                readOnly
                 onClick={(e) => {
                   e.stopPropagation();
                   onToggleSelect(file.filePath, e);

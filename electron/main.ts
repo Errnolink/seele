@@ -16,6 +16,7 @@ import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
+import { watch as chokidarWatch, type FSWatcher } from "chokidar";
 import * as mediaCache from "./mediaCache";
 import * as settingsStore from "./settings";
 import type { MediaFile, MetaPatch, ScanProgress } from "../src/scanner/types";
@@ -84,7 +85,9 @@ protocol.registerSchemesAsPrivileged([
  * blocks path-traversal reads of arbitrary filesystem locations (review
  * issue #6).
  *
- * Entries are added when a scan starts and cleared on a new scan.
+ * Entries are added when a scan starts or a cached root is restored.
+ * Roots are never dropped on a new scan — the library can hold several
+ * roots at once, each scanned independently.
  */
 const allowedRoots = new Set<string>();
 
@@ -96,14 +99,21 @@ function normalizeRoot(p: string): string {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-/** Check whether `requested` falls under an allowed scan root. */
+/** Check whether `requested` falls under an allowed scan root.
+ *  Iterates the Set directly — this runs on every `media://` request (one
+ *  per visible tile, hundreds per scroll), and the previous
+ *  `[...allowedRoots].some(...)` copied the whole Set into a fresh array
+ *  each time. */
 function isUnderAllowedRoot(requested: string): boolean {
   const requestedNorm =
     process.platform === "win32" ? requested.toLowerCase() : requested;
-  return [...allowedRoots].some((root) => {
+  for (const root of allowedRoots) {
     const rel = path.relative(root, requestedNorm);
-    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-  });
+    if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Narrow a raw IPC/worker message payload by `type`. */
@@ -264,6 +274,10 @@ async function pruneThumbCache(): Promise<void> {
  *  request re-extracts; it never blocks serving the response or the main
  *  process event loop (sync writes here froze scrolling on cold caches). */
 function storeThumb(cacheKey: string, bytes: Uint8Array): void {
+  // Delete before set: re-storing an existing key keeps its original
+  // insertion position in a Map, so a hot entry could still be the one
+  // evicted as "oldest".
+  thumbCache.delete(cacheKey);
   thumbCache.set(cacheKey, bytes);
   if (thumbCache.size > THUMB_CACHE_MAX) {
     const oldest = thumbCache.keys().next().value;
@@ -572,7 +586,12 @@ async function serveResized(
         .resize({ width: w, withoutEnlargement: true });
       return hasAlpha
         ? pipe.png({ quality: 80, compressionLevel: 6, palette: false }).toBuffer()
-        : pipe.jpeg({ quality: 80, mozjpeg: true }).toBuffer();
+        // Plain libjpeg-turbo, not mozjpeg. mozjpeg trades encode speed for
+        // ~20% smaller files — the wrong trade for a locally-served cache
+        // the user is actively waiting on. Measured on 9400x4000 sources:
+        // mozjpeg cost 270ms/image, 20% of total preview latency, to save
+        // bytes on a disk tier that already has a 512MB budget + eviction.
+        : pipe.jpeg({ quality: 80 }).toBuffer();
     });
     const out = new Uint8Array(bytes);
     storeThumb(cacheKey, out);
@@ -660,6 +679,9 @@ app.whenReady().then(() => {
   // Size the decode semaphores from the persisted settings before the
   // first thumbnail request arrives (issues.md item 5).
   applyConcurrencySettings(settingsStore.getSettings());
+  // Watch the persisted library roots so Syncthing deliveries trigger
+  // automatic re-scans of the affected root.
+  reconcileWatchers(settingsStore.getSettings().roots);
   // Bring the disk tier back under budget at startup — the cheapest moment
   // to pay the walk cost, and it catches whatever grew since last launch.
   void pruneThumbCache();
@@ -688,6 +710,8 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   mediaCache.flush();
   settingsStore.flush();
+  for (const watcher of watchers.values()) void watcher.close();
+  watchers.clear();
 });
 
 app.on("activate", () => {
@@ -699,13 +723,13 @@ app.on("activate", () => {
  * ------------------------------------------------------------------ */
 
 /**
- * One active scan at a time. `cancelScan` aborts the controller; the
- * utilityProcess worker observes the abort and short-circuits its walk
- * (review issue #3).
+ * One scan per library root at a time. Different roots scan concurrently
+ * (each in its own utilityProcess); re-scanning the SAME root cancels the
+ * in-flight walk first so a newer scan supersedes the stale one. Every
+ * relayed event is tagged with the originating folder so the renderer
+ * can route batches into the right root's state.
  */
-let activeScanCancel: (() => void) | null = null;
-/** Generation counter so cleanup only clears the active scan's cancel fn (v4 H-3). */
-let currentScanId = 0;
+const activeScans = new Map<string, { cancel: () => void }>();
 
 /** Open a native folder picker; return the chosen path or `null`. */
 ipcMain.handle("dialog:selectFolder", async () => {
@@ -732,20 +756,22 @@ ipcMain.handle("scan:start", async (event, folderPath: string) => {
   // parameter in an object just to narrow it (v2 review #9).
   if (typeof folderPath !== "string" || folderPath.length === 0) return 0;
 
-  // Cancel any still-running scan first.
-  activeScanCancel?.();
-
-  // Whitelist the new root BEFORE clearing the old ones, so thumbnails
-  // from a previous scan of a different folder don't briefly 403 while
-  // the new scan is starting (v2 review #11). We then drop every other
-  // root since only one folder is scanned at a time.
+  // A fresh scan of the same root supersedes any in-flight one; scans of
+  // other roots keep running (multi-root library).
   const newRoot = normalizeRoot(folderPath);
-  allowedRoots.clear();
+  activeScans.get(newRoot)?.cancel();
+
+  // Whitelist the root BEFORE the scan streams batches, so thumbnails
+  // never 403 mid-scan (v2 review #11). Roots accumulate — the library
+  // holds several at once.
   allowedRoots.add(newRoot);
 
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
   };
+  // Tag every event with the folder so concurrent scans of different
+  // roots stay distinct in the renderer.
+  const tag = (payload: object) => ({ folder: folderPath, ...payload });
 
   // Track the final count so the IPC return value matches the contract
   // (v2 review #12). The renderer also receives it via scan:done.
@@ -776,15 +802,21 @@ ipcMain.handle("scan:start", async (event, folderPath: string) => {
   );
 
   // Cancellation: the renderer calls `scan:cancel`; we tell the worker.
-  // Capture the generation so a late-exiting previous scan can't clear
-  // the current scan's cancel function (v4 review H-3).
-  const scanId = ++currentScanId;
-  activeScanCancel = () => {
+  // Cleanup removes only THIS root's entry when the scan exits.
+  const scanCancel = () => {
     if (child.pid) child.postMessage({ type: "cancel" });
   };
+  activeScans.set(newRoot, { cancel: scanCancel });
 
   // Worker → main → renderer streaming events.
   child.on("message", (msg: unknown) => {
+    // A newer scan of the same root may have cancelled this worker (the
+    // renderer re-scans on watcher pokes). Its abort emits a partial
+    // `done`; forwarding it would mark the root "done" with unpatched
+    // placeholders and the status guard would then drop the newer
+    // scan's batches/metaBatches — leaving 0-byte tiles that never fix
+    // themselves. Drop every event of a superseded scan.
+    if (activeScans.get(newRoot)?.cancel !== scanCancel) return;
     switch (messageType(msg)) {
       case "batch": {
         const files = messageFiles(msg);
@@ -792,11 +824,11 @@ ipcMain.handle("scan:start", async (event, folderPath: string) => {
           pathIndex.set(f.filePath, collected.length);
           collected.push(f);
         }
-        send("scan:batch", files);
+        send("scan:batch", tag({ files }));
         break;
       }
       case "progress":
-        send("scan:progress", messageProgress(msg) as ScanProgress);
+        send("scan:progress", tag({ progress: messageProgress(msg) as ScanProgress }));
         break;
       case "metaBatch": {
         const patches = messagePatches(msg);
@@ -816,33 +848,40 @@ ipcMain.handle("scan:start", async (event, folderPath: string) => {
             };
           }
         }
-        send("scan:metaBatch", patches);
+        send("scan:metaBatch", tag({ patches }));
         break;
       }
       case "done":
         total = messageTotal(msg);
-        send("scan:done", total);
+        send("scan:done", tag({ total }));
         mediaCache.recordScanResult(folderPath, collected);
         break;
       case "error":
-        send("scan:error", messageStringField(msg, "message") ?? "scan failed");
+        send("scan:error", tag({ message: messageStringField(msg, "message") ?? "scan failed" }));
         break;
     }
   });
   child.postMessage({ type: "start", folderPath });
 
-  // Wait for the worker to exit, then clean up. Only clear the cancel
-  // function if this scan is still the current one — a newer scan may
-  // have already replaced it (v4 review H-3).
+  // Wait for the worker to exit, then clean up. Only remove this root's
+  // entry if it still points at this scan — a newer scan of the same root
+  // may have already replaced it.
   await once(child, "exit");
-  if (currentScanId === scanId) activeScanCancel = null;
+  if (activeScans.get(newRoot)?.cancel === scanCancel) {
+    activeScans.delete(newRoot);
+  }
 
   return total;
 });
 
-/** Renderer-initiated scan cancellation (review issue #3). */
-ipcMain.handle("scan:cancel", () => {
-  activeScanCancel?.();
+/** Renderer-initiated scan cancellation (review issue #3): one root, or
+ *  all if the folder argument is omitted. */
+ipcMain.handle("scan:cancel", (_e, folderPath?: string) => {
+  if (typeof folderPath === "string" && folderPath.length > 0) {
+    activeScans.get(normalizeRoot(folderPath))?.cancel();
+  } else {
+    for (const { cancel } of activeScans.values()) cancel();
+  }
   return true;
 });
 
@@ -860,8 +899,8 @@ ipcMain.handle("scan:cancel", () => {
  */
 ipcMain.handle("scan:loadCached", async (_e, folderPath: string) => {
   if (typeof folderPath !== "string" || folderPath.length === 0) return [];
-  // Whitelist the root so cached thumbnails can load via media://.
-  allowedRoots.clear();
+  // Whitelist the root so cached thumbnails can load via media://. Roots
+  // accumulate — other roots stay whitelisted alongside this one.
   allowedRoots.add(normalizeRoot(folderPath));
   const cached = mediaCache.loadCachedFiles(folderPath);
   if (cached.length === 0) return cached;
@@ -882,15 +921,13 @@ ipcMain.handle("scan:loadCached", async (_e, folderPath: string) => {
   const missing = checks.filter((p): p is string => p !== null);
   if (missing.length > 0) {
     mediaCache.removeFiles(missing);
-    return cached.filter((f) => !missing.includes(f.filePath));
+    // Set membership, not `missing.includes(...)` inside the filter — that
+    // was O(cached × missing), i.e. seconds of blocked main process on a
+    // large library after a bulk delete outside the app.
+    const missingSet = new Set(missing);
+    return cached.filter((f) => !missingSet.has(f.filePath));
   }
   return cached;
-});
-
-/** Whether a folder has any cached files (for the startup restore check). */
-ipcMain.handle("scan:hasCached", (_e, folderPath: string) => {
-  if (typeof folderPath !== "string" || folderPath.length === 0) return false;
-  return mediaCache.hasCachedFiles(folderPath);
 });
 
 /**
@@ -950,10 +987,98 @@ ipcMain.handle("settings:set", (_e, patch: unknown) => {
     dialogBlur: p.dialogBlur,
     decodeConcurrency: p.decodeConcurrency,
     overscan: p.overscan,
+    roots: p.roots,
   });
   applyConcurrencySettings(updated);
+  // Library roots may have changed — keep watchers and the media://
+  // whitelist in sync.
+  reconcileWatchers(updated.roots);
   return updated;
 });
+
+/* ------------------------------------------------------------------ *
+ *  Library roots — file watching for Syncthing-style syncs.
+ *  Each configured root is watched; a debounced change pokes the
+ *  renderer (`library:rootChanged`), which re-scans that root so newly
+ *  synced files appear without a manual re-scan.
+ * ------------------------------------------------------------------ */
+
+/** Syncthing artifacts that must never trigger a re-scan: the
+ *  `.stfolder` / `.stignore` / `.stversions` markers and the
+ *  `~syncthing~*` temp files Syncthing writes before atomically
+ *  renaming a synced file into place. Watching those would re-scan on
+ *  every partial write. Any path segment match is ignored (descendants
+ *  of `.stversions` are hidden too). */
+function isSyncthingArtifact(p: string): boolean {
+  return p
+    .split(/[\\/]/)
+    .some(
+      (seg) =>
+        seg.startsWith(".st") ||
+        seg.startsWith(".syncthing") ||
+        seg.startsWith("~syncthing~"),
+    );
+}
+
+/** Watched roots, keyed by normalized path. */
+const watchers = new Map<string, FSWatcher>();
+/** Per-root debounce timers — a Syncthing burst collapses into one poke. */
+const watcherTimers = new Map<string, NodeJS.Timeout>();
+const WATCHER_DEBOUNCE_MS = 2000;
+
+function scheduleRootPoke(root: string): void {
+  const existing = watcherTimers.get(root);
+  if (existing) clearTimeout(existing);
+  watcherTimers.set(
+    root,
+    setTimeout(() => {
+      watcherTimers.delete(root);
+      const win = mainWindow;
+      if (win && !win.isDestroyed()) {
+        win.webContents.send("library:rootChanged", root);
+      }
+    }, WATCHER_DEBOUNCE_MS),
+  );
+}
+
+/** Start/stop watchers so the watched set matches `roots` exactly, and
+ *  whitelist every root for `media://` serving (thumbnails of restored
+ *  roots must load before their first scan:start). */
+function reconcileWatchers(roots: string[]): void {
+  const desired = new Set(roots.map(normalizeRoot));
+  for (const [key, watcher] of watchers) {
+    if (desired.has(key)) continue;
+    void watcher.close();
+    watchers.delete(key);
+    const timer = watcherTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      watcherTimers.delete(key);
+    }
+  }
+  // Iterate the ORIGINAL roots (not the normalized keys): the root string
+  // poked to the renderer and passed to chokidar must keep its on-disk
+  // spelling, or the renderer treats the lowercased spelling as a second
+  // root (duplicate tiles + a second scan + a second cache entry).
+  for (const root of roots) {
+    const key = normalizeRoot(root);
+    allowedRoots.add(key);
+    if (watchers.has(key)) continue;
+    // The folder may not exist yet (Syncthing hasn't created it) — skip
+    // it; it will be picked up the next time settings change or on the
+    // next launch.
+    if (!fs.existsSync(root)) continue;
+    const watcher = chokidarWatch(root, {
+      ignoreInitial: true,
+      ignored: isSyncthingArtifact,
+    });
+    watcher.on("all", () => scheduleRootPoke(root));
+    watcher.on("error", (err) =>
+      console.warn(`[watcher] ${root}:`, err instanceof Error ? err.message : err),
+    );
+    watchers.set(key, watcher);
+  }
+}
 
 /** Inspector insights: content hash, dominant colors, and EXIF camera info. */
 interface FileInsights {
@@ -1107,24 +1232,30 @@ ipcMain.handle("file:insights", async (_e, filePath: string): Promise<FileInsigh
   try {
     // Partial hash: first 64KB + last 64KB + size. Full-file read of a 2GB
     // video blocks the event loop and spikes RAM for no perceptual gain.
-    const stat = fs.statSync(filePath);
+    //
+    // The reads themselves are async too. The sync variants avoided the
+    // full-file read but still parked the main process on disk latency for
+    // every inspected file — which stalls IPC, the media:// server and the
+    // window, and is worst exactly where it hurts (a slow external drive
+    // or a network share).
+    const stat = await fs.promises.stat(filePath);
     const CHUNK = 64 * 1024;
     const hasher = createHash("sha1");
-    const fd = fs.openSync(filePath, "r");
+    const fh = await fs.promises.open(filePath, "r");
     try {
       if (stat.size <= CHUNK * 2) {
-        hasher.update(fs.readFileSync(filePath));
+        hasher.update(await fh.readFile());
       } else {
         const head = Buffer.alloc(CHUNK);
         const tail = Buffer.alloc(CHUNK);
-        fs.readSync(fd, head, 0, CHUNK, 0);
-        fs.readSync(fd, tail, 0, CHUNK, stat.size - CHUNK);
+        await fh.read(head, 0, CHUNK, 0);
+        await fh.read(tail, 0, CHUNK, stat.size - CHUNK);
         hasher.update(head);
         hasher.update(tail);
         hasher.update(Buffer.from(`@${stat.size}`));
       }
     } finally {
-      fs.closeSync(fd);
+      await fh.close().catch(() => {});
     }
     const hash = hasher.digest("hex").slice(0, 16);
 
@@ -1336,7 +1467,13 @@ ipcMain.handle(
 
 /**
  * Open a native folder picker scoped to the allowed root so the user
- * can choose a move destination. Returns the chosen path or null.
+ * can choose a move destination. Returns the chosen path, or null when
+ * the user cancels OR picks a directory outside every library root.
+ *
+ * The outside-root case used to return the path anyway; `file:move` then
+ * rejected it with "forbidden" and the UI reported a failed move with no
+ * explanation. Rejecting here keeps the guarantee in one place: the
+ * picker only ever yields a destination the move can actually use.
  */
 ipcMain.handle(
   "dialog:pickMoveTarget",
@@ -1350,8 +1487,7 @@ ipcMain.handle(
     });
     if (result.canceled || result.filePaths.length === 0) return null;
     const picked = result.filePaths[0];
-    // Allow picking inside or creating under the root, but warn if outside.
-    return picked;
+    return isUnderAllowedRoot(path.resolve(picked)) ? picked : null;
   },
 );
 

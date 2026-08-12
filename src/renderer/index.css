@@ -111,6 +111,25 @@ textarea,
 }
 
 /* =========================================================================
+ *  Keyboard focus ring.
+ *
+ *  Every control in the app is a bare <button>/<div role="button"> with a
+ *  custom skin, and the inputs set `outline-none` — so keyboard users had
+ *  no visible focus anywhere. `:focus-visible` only paints for keyboard
+ *  (and other non-pointer) focus, so mouse clicks stay ring-free.
+ *  The offset ring survives the `clip-path` ticket shapes, which would
+ *  otherwise shear a plain outline off.
+ * ========================================================================= */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-nerv-amber);
+  outline-offset: 1px;
+  /* Clipped shapes (.eva-ticket/.eva-cut/.tag-chip) crop an outline, so
+     back it with a shadow that renders inside the clip region too. */
+  box-shadow: 0 0 0 2px rgba(255, 183, 0, 0.35);
+  z-index: 1;
+}
+
+/* =========================================================================
  *  CRT scanline overlay (§2.4) — minimal static atmosphere.
  *  Two single-pass backgrounds (no repaint, no animation):
  *    1. scanline mask — 2% black, 4px period
@@ -352,12 +371,18 @@ textarea,
 }
 
 /* OS-level reduced-motion preference — respected by default on first
-   launch via the settings initializer, and as a hard fallback. */
+   launch via the settings initializer, and as a hard fallback for profiles
+   whose settings file predates the preference.
+
+   Scoped to `:not(:has(.seele-motion-ok))` so an explicit "Reduce Motion:
+   off" in Settings still wins: the App root carries `.seele-motion-ok`
+   in that state. Without the guard the media query overrode the toggle
+   and it read as broken for anyone whose OS asks for reduced motion. */
 @media (prefers-reduced-motion: reduce) {
-  [class*="animate-"] {
+  body:not(:has(.seele-motion-ok)) [class*="animate-"] {
     animation: none !important;
   }
-  .shimmer {
+  body:not(:has(.seele-motion-ok)) .shimmer {
     background: rgba(30, 34, 53, 0.55);
     background-size: auto;
     animation: shimmer-pulse 1.4s ease-in-out infinite;

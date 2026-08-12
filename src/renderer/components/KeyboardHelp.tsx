@@ -12,7 +12,7 @@ const SHORTCUTS: { section: string; entries: ShortcutEntry[] }[] = [
     section: "Navigation",
     entries: [
       { keys: ["Ctrl", "O"], label: "Open folder" },
-      { keys: ["Ctrl", "Enter"], label: "Start scan" },
+      { keys: ["Ctrl", "Enter"], label: "Re-scan all roots" },
       { keys: ["Esc"], label: "Close viewer / clear search / clear folder" },
       { keys: ["←", "→"], label: "Previous / next in viewer" },
       { keys: ["R"], label: "Reload failed thumbnails" },

@@ -49,6 +49,24 @@ export interface MediaViewerProps {
   onToggleFileTag?: (filePath: string, tagKey: string) => void;
 }
 
+/** Cap on the per-session insights cache. Holding one entry per visited
+ *  file grew without bound while arrowing through a 25k-file library. */
+const INSIGHTS_CACHE_MAX = 300;
+
+/** Insert into the insights cache, evicting the oldest entry past the cap. */
+function cacheInsights(
+  cache: Map<string, FileInsights | null>,
+  filePath: string,
+  insights: FileInsights | null,
+): void {
+  cache.delete(filePath);
+  cache.set(filePath, insights);
+  if (cache.size > INSIGHTS_CACHE_MAX) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+}
+
 /** Corner ticks frame the media stage. */
 function CornerTicks({ size = 14 }: { size?: number }) {
   const base = "absolute z-30 border-nerv-orange/40";
@@ -216,7 +234,12 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
     // raw for an 9000px source) and looks crisp at fit-to-screen.
     const VIEWER_PREVIEW_W = 1920;
     const isGif = /\.gif$/i.test(file.filePath);
-    const isHeic = /\.heic?$/i.test(file.filePath);
+    // `.heic` AND `.heif` — both are scanned as images (scanner/extensions),
+    // and Chromium can decode neither, so both must suppress the full-res
+    // zoom layer. The old `/\.heic?$/` matched `.hei`/`.heic` but not
+    // `.heif`, so zooming a HEIF fetched the whole raw file over media://
+    // to render an image that never decoded.
+    const isHeic = /\.hei[cf]$/i.test(file.filePath);
     const previewUrl = useMemo(() => {
       const base = toMediaUrl(file.filePath);
       return isVideo || isGif ? base : `${base}?w=${VIEWER_PREVIEW_W}`;
@@ -239,8 +262,13 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
     }, [file.filePath, setFullResLoaded, setPreviewLoaded]);
 
     // Preload adjacent images for instant navigation (no flash on next/prev).
+    // Held until the CURRENT preview has decoded: each neighbour is another
+    // full-resolution decode on the main process's 4-permit sharp gate, so
+    // firing them immediately made the visible image queue behind work for
+    // images the user may never look at.
     useEffect(() => {
       if (!files || isVideo) return;
+      if (!previewLoaded) return;
       const targets = [currentIndex - 1, currentIndex + 1];
       for (const i of targets) {
         if (i >= 0 && i < files.length) {
@@ -253,7 +281,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
           }
         }
       }
-    }, [currentIndex, files, isVideo]);
+    }, [currentIndex, files, isVideo, previewLoaded]);
 
     // ── file insights (side panel): palette + hash + EXIF camera ──
     // Cached per file path; rapid filmstrip flipping never re-fetches an
@@ -276,6 +304,15 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
       setInsightsLoading(false);
       // Don't spend main-process decodes on a hidden panel.
       if (!showMetadata) {
+        wantedPathRef.current = null;
+        return;
+      }
+      // Nor before the image itself is on screen. `file:insights` runs three
+      // more sharp operations on the same 4-permit gate that produces the
+      // ?w=1920 preview — measured at ~770ms on large sources, i.e. ~60% on
+      // top of the preview's own cost, spent competing with it. Videos have
+      // no preview layer to wait on.
+      if (!isVideo && !previewLoaded) {
         wantedPathRef.current = null;
         return;
       }
@@ -304,7 +341,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
         window.scanAPI
           .getFileInsights(path)
           .then((insights) => {
-            insightsCacheRef.current.set(path, insights);
+            cacheInsights(insightsCacheRef.current, path, insights);
             if (currentFilePathRef.current === path) {
               applyInsights(insights);
               setInsightsLoading(false);
@@ -312,12 +349,12 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
             drain();
           })
           .catch(() => {
-            insightsCacheRef.current.set(path, null);
+            cacheInsights(insightsCacheRef.current, path, null);
             drain();
           });
       };
       drain();
-    }, [file.filePath, showMetadata]);
+    }, [file.filePath, showMetadata, isVideo, previewLoaded]);
 
     // ── navigate to specific index via filmstrip ──
     // Uses onNavigateTo for O(1) jump; falls back to step-by-step
@@ -348,6 +385,9 @@ export const MediaViewer: React.FC<MediaViewerProps> = memo(
         exit={{ opacity: 0, transition: OVERLAY_EXIT }}
         className="fixed inset-0 z-50 flex flex-col bg-nerv-bg select-none"
         tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Viewing ${file.fileName}`}
       >
         {/* scanline overlay */}
         <div className="pointer-events-none absolute inset-0 z-10 bg-gradient-to-b from-transparent via-nerv-orange/[0.03] to-transparent animate-scanline" />

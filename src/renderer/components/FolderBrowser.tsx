@@ -13,6 +13,7 @@
  */
 import { memo, useMemo } from "react";
 import type { FolderNode, MediaFile } from "../types";
+import { normKey } from "../folderTree";
 import { formatBytes } from "../utils";
 
 /** RAW sensor file extensions (mapped to the magenta RAW chip). */
@@ -56,36 +57,42 @@ function classifyFile(f: MediaFile): "img" | "vid" | "raw" {
 }
 
 /** Build folder → files map (each folder's subtree: own + descendants) in
- *  ONE pass over the file list. Cards read their bucket in O(1) instead of
- *  each card re-filtering the whole array (O(cards × files)). Keys are the
- *  tree's normalized lowercase paths (matching `FolderNode.path`). */
+ *  ONE pass over the file list per root subtree. Cards read their bucket in
+ *  O(1) instead of each card re-filtering the whole array (O(cards × files)).
+ *  Keys are the tree's `FolderNode.path` values verbatim — the synthetic
+ *  LIBRARY node (path "") is unwrapped into its per-root children so root
+ *  cards (real-case paths) and descendant cards (normalized lowercase
+ *  paths, as built by folderTree) each hit their own bucket. */
 function buildFolderBuckets(
   tree: FolderNode,
   files: MediaFile[],
 ): Map<string, MediaFile[]> {
   const buckets = new Map<string, MediaFile[]>();
-  const rootNorm = tree.path.replace(/\\/g, "/").toLowerCase().replace(/\/$/, "");
-  for (const f of files) {
-    const rel = f.normPath.startsWith(rootNorm + "/")
-      ? f.normPath.slice(rootNorm.length + 1)
-      : f.normPath;
-    const segs = rel.split("/").filter(Boolean);
-    segs.pop(); // drop the file name — directory segments only
-    let acc = rootNorm;
-    let bucket = buckets.get(acc);
+  const subRoots = tree.path === "" ? tree.children : [tree];
+  for (const rootNode of subRoots) {
+    const rootReal = rootNode.path;
+    const rootNorm = normKey(rootReal);
+    let bucket = buckets.get(rootReal);
     if (!bucket) {
       bucket = [];
-      buckets.set(acc, bucket);
+      buckets.set(rootReal, bucket);
     }
-    bucket.push(f);
-    for (const seg of segs) {
-      acc += "/" + seg;
-      bucket = buckets.get(acc);
-      if (!bucket) {
-        bucket = [];
-        buckets.set(acc, bucket);
-      }
+    for (const f of files) {
+      if (!f.normPath.startsWith(rootNorm + "/")) continue;
       bucket.push(f);
+      const rel = f.normPath.slice(rootNorm.length + 1);
+      const segs = rel.split("/").filter(Boolean);
+      segs.pop(); // drop the file name — directory segments only
+      let acc = rootNorm;
+      for (const seg of segs) {
+        acc += "/" + seg;
+        bucket = buckets.get(acc);
+        if (!bucket) {
+          bucket = [];
+          buckets.set(acc, bucket);
+        }
+        bucket.push(f);
+      }
     }
   }
   return buckets;

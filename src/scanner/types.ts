@@ -47,9 +47,10 @@ export interface MediaFile {
    */
   birthtimeMs: number;
   /**
-   * `YYYY-MM-DD` date key derived from `birthtime` (local time), or the
-   * literal `"unknown"` when the date is invalid. Used as a stable group
-   * key without per-render Date parsing.
+   * `YYYY-MM-DD` date key derived from `birthtime` in UTC (matching
+   * `birthtime`'s ISO string), or the literal `"unknown"` when the date
+   * is invalid. Used as a stable group key without per-render Date
+   * parsing.
    */
   dateKey: string;
 }

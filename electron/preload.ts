@@ -1,18 +1,18 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { MediaFile, MetaPatch, ScanProgress } from "../src/scanner/types";
 import type { AppSettings } from "./settings";
-/** Tracks the previous scan's listener cleanup so a new scan removes them (v4 H-1). */
-let activeScanCleanup: (() => void) | null = null;
 
 /**
  * Surface offered to the renderer under `window.scanAPI`.
  *
  * The streaming contract mirrors the main process: `startScan` returns
  * a promise for the final count, while batches and progress arrive via
- * the callbacks.  Listeners are removed automatically when the scan
- * completes, so the renderer can call `startScan` again without leaks.
- *
- * `cancelScan` asks the main process to abort the active scan.
+ * the callbacks. Every scan event is tagged with the originating folder
+ * (main relays `{ folder, ... }` payloads), so concurrent scans of
+ * different library roots can run at once — each `startScan` call only
+ * forwards events matching its own folder. Listeners are removed when
+ * that scan completes or errors, so repeated `startScan` calls never
+ * leak handlers (v4 review H-1).
  */
 export interface ScanAPI {
   /** Open a native folder picker. Resolves to the path or `null`. */
@@ -20,37 +20,22 @@ export interface ScanAPI {
 
   /**
    * Resolve the absolute path of a dropped/selected `File` via Electron's
-   * `webUtils.getPathForFile` — the supported replacement for the
-   * deprecated non-standard `File.path`. Returns `""` when the File has no
-   * backing path (e.g. a synthetic File); callers fall back to `File.path`.
+   * `webUtils.getPathForFile` (the supported replacement for the
+   * deprecated non-standard `File.path`).
    */
   getPathForFile(file: File): string;
 
   /**
    * Convert an absolute file path into a `media://` URL the renderer can
-   * load as an image/video source (contextIsolation blocks file://).
-   *
-   * Shape: `media://local/<percent-encoded-absolute-path>`. The host is a
-   * fixed sentinel so the full path lives in the pathname — URL host
-   * parsing no longer lowercases Windows drive letters or splits on
-   * sub-directories (review issue #2).
+   * load as an <img> src. Thumbnails are resized server-side via `?w=`.
    */
   toMediaUrl(filePath: string): string;
 
   /**
-   * Begin scanning `folderPath`.
-   *
-   * Two-phase scan (v5 rework): Phase 1 emits placeholder files
-   * instantly (size 0, date "unknown") so the gallery renders before
-   * any `stat` I/O. Phase 2 stats each file and calls `onMetaBatch`
-   * with patches to fill in real size/date progressively.
-   *
-   * @param onBatch      called with each chunk of ~250 discovered files
-   * @param onProgress   optional, called as batches flush
-   * @param onDone       optional, called once with the total count
-   * @param onError      optional, called if the scan fails on the main side
-   * @param onMetaBatch  optional, called with metadata patches (Phase 2)
-   * @returns            the final total count
+   * Begin scanning `folderPath`. Streams batches/progress/metadata to the
+   * given callbacks and resolves with the final file count. Multiple
+   * concurrent scans of different folders are supported; each call's
+   * events are routed by folder.
    */
   startScan(
     folderPath: string,
@@ -61,8 +46,8 @@ export interface ScanAPI {
     onMetaBatch?: (patches: MetaPatch[]) => void,
   ): Promise<number>;
 
-  /** Cancel the active scan, if any. Resolves once cancellation is sent. */
-  cancelScan(): Promise<boolean>;
+  /** Cancel the scan of `folderPath`, or every active scan if omitted. */
+  cancelScan(folderPath?: string): Promise<boolean>;
 
   /**
    * Restore a folder from the on-disk dimension cache instantly, without a
@@ -71,8 +56,12 @@ export interface ScanAPI {
    */
   loadCachedFiles(folderPath: string): Promise<MediaFile[]>;
 
-  /** Whether a folder has any cached files (startup restore check). */
-  hasCachedFiles(folderPath: string): Promise<boolean>;
+  /**
+   * Subscribe to library-root change notifications (the main process
+   * watches each root; a debounced filesystem change fires this with the
+   * affected root). Returns an unsubscribe function.
+   */
+  onRootChanged(callback: (root: string) => void): () => void;
 
   /**
    * Persist measured dimensions for files (v4 rework). The renderer
@@ -129,25 +118,45 @@ const api: ScanAPI = {
   toMediaUrl: (filePath) => `media://local/${encodeURIComponent(filePath)}`,
 
   startScan: (folderPath, onBatch, onProgress, onDone, onError, onMetaBatch) => {
-    // Clean up any previous scan listeners — without this, rapid
-    // re-scans or a worker crash-without-done stack duplicate handlers,
-    // causing double processing and a memory leak (v4 review H-1).
-    activeScanCleanup?.();
-
-    const batchHandler = (_e: Electron.IpcRendererEvent, batch: MediaFile[]) =>
-      onBatch(batch);
+    // Route by folder: concurrent scans of different roots each register
+    // their own handlers, and only events for THIS folder are forwarded.
+    const batchHandler = (
+      _e: Electron.IpcRendererEvent,
+      payload: { folder: string; files: MediaFile[] },
+    ) => {
+      if (payload.folder !== folderPath) return;
+      onBatch(payload.files);
+    };
     const progressHandler = (
       _e: Electron.IpcRendererEvent,
-      progress: ScanProgress,
-    ) => onProgress?.(progress);
-    const errorHandler = (
-      _e: Electron.IpcRendererEvent,
-      message: string,
-    ) => onError?.(message);
+      payload: { folder: string; progress: ScanProgress },
+    ) => {
+      if (payload.folder !== folderPath) return;
+      onProgress?.(payload.progress);
+    };
     const metaBatchHandler = (
       _e: Electron.IpcRendererEvent,
-      patches: MetaPatch[],
-    ) => onMetaBatch?.(patches);
+      payload: { folder: string; patches: MetaPatch[] },
+    ) => {
+      if (payload.folder !== folderPath) return;
+      onMetaBatch?.(payload.patches);
+    };
+    const errorHandler = (
+      _e: Electron.IpcRendererEvent,
+      payload: { folder: string; message: string },
+    ) => {
+      if (payload.folder !== folderPath) return;
+      cleanup();
+      onError?.(payload.message);
+    };
+    const doneHandler = (
+      _e: Electron.IpcRendererEvent,
+      payload: { folder: string; total: number },
+    ) => {
+      if (payload.folder !== folderPath) return;
+      cleanup();
+      onDone?.(payload.total);
+    };
 
     function cleanup(): void {
       ipcRenderer.removeListener("scan:batch", batchHandler);
@@ -155,31 +164,30 @@ const api: ScanAPI = {
       ipcRenderer.removeListener("scan:error", errorHandler);
       ipcRenderer.removeListener("scan:metaBatch", metaBatchHandler);
       ipcRenderer.removeListener("scan:done", doneHandler);
-      activeScanCleanup = null;
     }
-
-    const doneHandler = (_e: Electron.IpcRendererEvent, total: number) => {
-      cleanup();
-      onDone?.(total);
-    };
-
-    activeScanCleanup = cleanup;
 
     ipcRenderer.on("scan:batch", batchHandler);
     ipcRenderer.on("scan:progress", progressHandler);
     ipcRenderer.on("scan:error", errorHandler);
     ipcRenderer.on("scan:metaBatch", metaBatchHandler);
-    ipcRenderer.once("scan:done", doneHandler);
+    ipcRenderer.on("scan:done", doneHandler);
 
     return ipcRenderer.invoke("scan:start", folderPath);
   },
 
-  cancelScan: () => ipcRenderer.invoke("scan:cancel"),
+  cancelScan: (folderPath) => ipcRenderer.invoke("scan:cancel", folderPath),
 
   loadCachedFiles: (folderPath: string) =>
     ipcRenderer.invoke("scan:loadCached", folderPath),
-  hasCachedFiles: (folderPath: string) =>
-    ipcRenderer.invoke("scan:hasCached", folderPath),
+
+  onRootChanged: (callback) => {
+    const handler = (_e: Electron.IpcRendererEvent, root: string) => {
+      if (typeof root === "string" && root.length > 0) callback(root);
+    };
+    ipcRenderer.on("library:rootChanged", handler);
+    return () => ipcRenderer.removeListener("library:rootChanged", handler);
+  },
+
   saveDimensions: (
     entries: { filePath: string; width: number; height: number }[],
   ) => ipcRenderer.invoke("scan:saveDimensions", entries),

@@ -1,16 +1,17 @@
 /**
  * Header — global command bar (§7.1).
  *
- * Two rows on the `eva-top-bar` EVA-purple surface:
- *  - Row 1: brand block, sidebar-toggle chip, folder breadcrumb, gold Scan
- *    ticket, lime search field with a `⌘K` chip, violet tools + live clock.
+ * Two rows:
+ *  - Row 1: sidebar-toggle chip, brand block, folder pill, Scan ticket,
+ *    search field with a platform-correct palette chip, tools + live clock.
  *  - Row 2: control strip — VIEW / FILTER / GROUP / SORT `EvaSegmented`
  *    clusters, sort-direction sqbtn, SIZE frame readout (hidden in list
- *    mode), RESULT frame readout, separated by `.eva-divider` ticks.
+ *    and folders modes), RESULT readout, separated by `.eva-divider` ticks.
  *
- * Row 1 is the Windows frameless titlebar drag region; every interactive
- * element opts out via `.no-drag`, and `paddingRight: 160px` clears the
- * caption buttons.
+ * Row 1 is a frameless-window drag region (`.titlebar-drag`); every
+ * interactive element opts out via `.no-drag`. The min/max/close caption
+ * buttons live in `TitleBar` above this, so no caption-clearing pad is
+ * needed here.
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { EvaSegmented, type EvaOption } from "./EvaSegmented";
@@ -24,7 +25,7 @@ import type {
 import { formatClock, pad } from "../utils";
 
 export interface HeaderProps {
-  currentFolder: string | null;
+  roots: string[];
   onPickFolder: () => void;
   onScan: () => void;
   scanning: boolean;
@@ -149,6 +150,12 @@ const GROUP_OPTIONS: EvaOption<GroupMode>[] = [
   { value: "resolution", label: "RES", title: "Group by resolution" },
 ];
 
+/** Command-palette hint shown in the search field. macOS uses ⌘, every
+ *  other platform Ctrl — the App keyboard handler accepts both. */
+const PALETTE_HINT = /Mac|iPhone|iPad/.test(navigator.userAgent)
+  ? "⌘K"
+  : "Ctrl K";
+
 const SORT_OPTIONS: EvaOption<SortMode>[] = [
   { value: "name", label: "NAME", title: "Sort by filename" },
   { value: "date", label: "DATE", title: "Sort by date" },
@@ -158,7 +165,7 @@ const SORT_OPTIONS: EvaOption<SortMode>[] = [
 
 export function Header(props: HeaderProps) {
   const {
-    currentFolder,
+    roots,
     onPickFolder,
     onScan,
     scanning,
@@ -194,10 +201,13 @@ export function Header(props: HeaderProps) {
     return () => window.clearInterval(id);
   }, []);
 
-  const folderLabel = currentFolder
-    ? currentFolder.replace(/\\/g, "/").split("/").filter(Boolean).pop() ??
-      currentFolder
+  const folderLabel = roots.length > 0
+    ? roots[0].replace(/\\/g, "/").split("/").filter(Boolean).pop() ??
+      roots[0]
     : "NO FOLDER SELECTED";
+  const extraRoots = roots.length - 1;
+  const folderLabelFull =
+    roots.length > 1 ? `${folderLabel} +${extraRoots}` : folderLabel;
 
   return (
     <header className="relative shrink-0 z-30 select-none">
@@ -226,21 +236,21 @@ export function Header(props: HeaderProps) {
           {/* Brand block — plain amber wordmark, no gradient icon */}
           <div className="shrink-0 flex items-center gap-2 pr-3 border-r border-nerv-border/60">
             <span className="eva-title text-[16px] text-nerv-amber">Seele</span>
-            <span className="text-[9px] text-nerv-muted">v2.5</span>
+            <span className="text-[9px] text-nerv-muted">v2.7</span>
           </div>
 
-          {/* Folder pill — terse "ROOT" label, neutral styling */}
+          {/* Folder pill — terse root label, neutral styling */}
           <button
             type="button"
             onClick={onPickFolder}
-            title={currentFolder ?? "Pick a folder to scan"}
+            title={roots.length > 0 ? "Add another folder to the library" : "Pick a folder to scan"}
             className="no-drag shrink-0 h-8 px-3 flex items-center gap-1.5 text-[11px] text-nerv-text-dim hover:text-nerv-amber transition-colors max-w-[200px]"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0 text-nerv-amber">
               <path d="M3 7a2 2 0 0 1 2-2h3l2 2h4a2 2 0 0 1 2 2v1" />
               <rect x="3" y="9" width="18" height="11" />
             </svg>
-            <span className="truncate">{folderLabel.toUpperCase()}</span>
+            <span className="truncate">{folderLabelFull.toUpperCase()}</span>
           </button>
 
           {/* Scan button — terse "Scan" */}
@@ -286,13 +296,28 @@ export function Header(props: HeaderProps) {
                 className="no-drag flex-1 min-w-0 bg-transparent outline-none text-[11px] text-nerv-text placeholder:text-nerv-muted"
               />
               {searchQuery.trim().length > 0 ? (
-                <button type="button" onClick={() => onSearchChange("")} className="text-nerv-muted hover:text-nerv-text shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onSearchChange("")}
+                  aria-label="Clear search"
+                  title="Clear search"
+                  className="text-nerv-muted hover:text-nerv-text shrink-0"
+                >
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
                 </button>
               ) : (
-                <span className="no-drag border border-nerv-border px-1.5 py-0.5 text-[9px] text-nerv-muted cursor-pointer" onClick={onOpenPalette}>
-                  &#8984;K
-                </span>
+                // Was a hardcoded ⌘K on a non-focusable <span>: the wrong
+                // modifier on Windows/Linux (the shortcut is Ctrl+K there)
+                // and unreachable by keyboard despite being clickable.
+                <button
+                  type="button"
+                  onClick={onOpenPalette}
+                  title="Command palette"
+                  aria-label="Open command palette"
+                  className="no-drag shrink-0 border border-nerv-border px-1.5 py-0.5 text-[9px] text-nerv-muted hover:text-nerv-amber hover:border-nerv-amber/50 transition-colors cursor-pointer"
+                >
+                  {PALETTE_HINT}
+                </button>
               )}
             </div>
           </div>

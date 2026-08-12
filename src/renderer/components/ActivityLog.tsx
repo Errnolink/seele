@@ -16,6 +16,8 @@ export interface ActivityEntry {
 export interface ActivityLogProps {
   entries: ActivityEntry[];
   onClear: () => void;
+  /** Open the full session audit trail (the modal that can revert an op). */
+  onOpenFullLog: () => void;
 }
 
 const ACTION_META: Record<ActivityEntry["action"], { label: string; icon: string; color: string }> = {
@@ -28,13 +30,13 @@ const ACTION_META: Record<ActivityEntry["action"], { label: string; icon: string
  * Collapsible activity log panel. Shows recent file operations for the
  * current session. Floats in the bottom-right corner.
  */
-export const ActivityLog: React.FC<ActivityLogProps> = memo(({ entries, onClear }) => {
+export const ActivityLog: React.FC<ActivityLogProps> = memo(({ entries, onClear, onOpenFullLog }) => {
   const [open, setOpen] = useState(false);
 
   if (entries.length === 0) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-30 flex flex-col gap-1">
+    <div className="fixed bottom-[var(--seele-dock-bottom)] right-6 z-30 flex flex-col gap-1">
       {open && (
         <div className="w-80 max-h-64 overflow-y-auto bg-nerv-panel border border-nerv-border rounded shadow-[0_4px_24px_rgba(0,0,0,0.5)] flex flex-col">
           {/* Header */}
@@ -45,6 +47,14 @@ export const ActivityLog: React.FC<ActivityLogProps> = memo(({ entries, onClear 
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                onClick={onOpenFullLog}
+                title="Open the full audit trail (revert moves and renames)"
+                className="text-[8px] font-mono tracking-wider uppercase text-nerv-muted hover:text-nerv-amber transition-colors"
+              >
+                FULL LOG
+              </button>
+              <button
+                type="button"
                 onClick={onClear}
                 className="text-[8px] font-mono tracking-wider uppercase text-nerv-muted hover:text-nerv-red transition-colors"
               >
@@ -53,6 +63,7 @@ export const ActivityLog: React.FC<ActivityLogProps> = memo(({ entries, onClear 
               <button
                 type="button"
                 onClick={() => setOpen(false)}
+                aria-label="Collapse activity log"
                 className="text-nerv-muted hover:text-nerv-text text-xs"
               >
                 ✕

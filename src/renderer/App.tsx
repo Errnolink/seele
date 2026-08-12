@@ -24,13 +24,13 @@ import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { formatBytes } from "./utils";
 import { LARGE_FILE_BYTES } from "./types";
 import { useScanState } from "./hooks/useScanState";
+import { buildLibraryTree, countFolders } from "./folderTree";
 import { useTags } from "./hooks/useTags";
 import { useSettings } from "./hooks/useSettings";
 import { useFavorites } from "./hooks/useFavorites";
 import { useSelection } from "./hooks/useSelection";
 import { useHiddenFolders } from "./hooks/useHiddenFolders";
 import type {
-  FolderNode,
   GroupMode,
   MediaFile,
   MediaTypeFilter,
@@ -39,88 +39,8 @@ import type {
   SortMode,
   ViewMode,
 } from "./types";
-import type { ScanProgress } from "../scanner/types";
 
 const SEARCH_DEBOUNCE_MS = 200;
-
-/**
- * Build a nested folder tree from the flat file list (§10.1).
- * Each node carries a running file count and size sum. Uses the
- * scanner's precomputed `normPath` so we don't re-normalize on every
- * render.
- */
-function buildFolderTree(
-  files: MediaFile[],
-  rootPath: string,
-): FolderNode | null {
-  if (files.length === 0) return null;
-  const normRoot = rootPath.replace(/\\/g, "/").toLowerCase().replace(/\/$/, "");
-  const root: FolderNode = {
-    path: rootPath,
-    name: rootPath.split(/[\\/]/).pop() || rootPath,
-    count: 0,
-    size: 0,
-    children: [],
-  };
-  // Index children by their normalized path segment stack for dedup.
-  const nodeByPath = new Map<string, FolderNode>();
-  nodeByPath.set(normRoot, root);
-
-  for (const f of files) {
-    // Walk from root down to the file's folder.
-    const rel = f.normPath.startsWith(normRoot + "/")
-      ? f.normPath.slice(normRoot.length + 1)
-      : f.normPath;
-    const segs = rel.split("/").filter(Boolean);
-    // Drop the file name itself — keep directory segments only.
-    segs.pop();
-    let cur = root;
-    let acc = normRoot;
-    for (const seg of segs) {
-      acc += "/" + seg;
-      let child = nodeByPath.get(acc);
-      if (!child) {
-        child = {
-          path: acc,
-          name: seg,
-          count: 0,
-          size: 0,
-          children: [],
-        };
-        nodeByPath.set(acc, child);
-        cur.children.push(child);
-      }
-      cur = child;
-    }
-    cur.count += 1;
-    cur.size += f.sizeBytes;
-    root.count += 1;
-    root.size += f.sizeBytes;
-  }
-  // Aggregate counts up the tree so parent folders show total descendant files.
-  const aggregate = (nd: FolderNode): { count: number; size: number } => {
-    for (const c of nd.children) {
-      const a = aggregate(c);
-      nd.count += a.count;
-      nd.size += a.size;
-    }
-    return { count: nd.count, size: nd.size };
-  };
-  aggregate(root);
-  return root;
-}
-
-/** Count distinct folders in the tree (for the sidebar header). */
-function countFolders(node: FolderNode | null): number {
-  if (!node) return 0;
-  let n = 0;
-  const walk = (nd: FolderNode) => {
-    n += 1;
-    for (const c of nd.children) walk(c);
-  };
-  walk(node);
-  return n;
-}
 
 /**
  * Resolve the absolute path of a dropped File. Electron 33's
@@ -134,10 +54,22 @@ function getDroppedPath(file: File): string | null {
   return (file as File & { path?: string }).path || null;
 }
 
+/** True when `path` lives under `root` (case-insensitive, segment-safe). */
+function isPathUnder(path: string, root: string): boolean {
+  const normPath = path.replace(/\\/g, "/").toLowerCase();
+  const normRoot = root.replace(/\\/g, "/").toLowerCase().replace(/\/$/, "");
+  return normPath === normRoot || normPath.startsWith(normRoot + "/");
+}
+
 export default function App() {
   const {
-    state: scan,
+    rootStates,
     files,
+    totalCount,
+    isScanning,
+    status: scanStatus,
+    error: scanError,
+    progress: scanProgress,
     onStart,
     onReset,
     onBatch,
@@ -163,9 +95,7 @@ export default function App() {
 
   // ---- core state ----
   const [booted, setBooted] = useState(false);
-  const [folder, setFolder] = useState<string | null>(
-    () => localStorage.getItem("wiergise:lastFolder"),
-  );
+  const roots = settings.roots;
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("masonry");
@@ -226,8 +156,8 @@ export default function App() {
   const debouncedQuery = useDebouncedValue(searchQuery, SEARCH_DEBOUNCE_MS);
 
   // ---- refs for stable keyboard handler ----
-  const folderRef = useRef(folder);
-  const scanStatusRef = useRef(scan.status);
+  const rootsRef = useRef(roots);
+  const scanStatusRef = useRef(scanStatus);
   const searchQueryRef = useRef(searchQuery);
   const selectedFolderRef = useRef(selectedFolder);
   const viewerIndexRef = useRef(viewerIndex);
@@ -239,11 +169,11 @@ export default function App() {
     showSettingsRef.current = showSettings;
   }, [showSettings]);
   useEffect(() => {
-    folderRef.current = folder;
-  }, [folder]);
+    rootsRef.current = roots;
+  }, [roots]);
   useEffect(() => {
-    scanStatusRef.current = scan.status;
-  }, [scan.status]);
+    scanStatusRef.current = scanStatus;
+  }, [scanStatus]);
   useEffect(() => {
     searchQueryRef.current = searchQuery;
   }, [searchQuery]);
@@ -263,53 +193,106 @@ export default function App() {
     showAnalyticsRef.current = showAnalytics;
   }, [showAnalytics]);
 
-  // ---- instant cache restore on mount ----
-  useEffect(() => {
-    if (!folder) return;
-    void window.scanAPI.loadCachedFiles(folder).then((cached) => {
-      if (cached.length > 0) onRestore(cached);
-    }).catch(() => {
-      /* cache restore is best-effort — scan will fill in */
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // ---- library roots: restore + scan orchestration ----
 
+  /** True when `path` is already a root or nested under one. */
+  const isKnownPath = useCallback(
+    (path: string) => roots.some((r) => isPathUnder(path, r)),
+    [roots],
+  );
+
+  /** Add a folder as a new library root (ignored if it overlaps one). */
+  const addRoot = useCallback((root: string) => {
+    setSelectedFolder(null);
+    updateSettings({ roots: [...roots, root] });
+  }, [roots, updateSettings]);
+
+  /** Remove a root from the library; its files leave the grid. */
+  const removeRoot = useCallback((root: string) => {
+    onReset(root);
+    if (selectedFolder && isPathUnder(selectedFolder, root)) {
+      setSelectedFolder(null);
+    }
+    updateSettings({ roots: roots.filter((r) => r !== root) });
+  }, [roots, updateSettings, onReset, selectedFolder]);
+
+  /** Restore a root's cached files instantly, then re-scan it in the
+   *  background so Syncthing deliveries appear without a manual re-scan.
+   *  Scans of the same root are serialized: a poke that lands while a
+   *  scan is running queues behind it, so restore/start/batches of two
+   *  overlapping scans can never interleave into one root's state. */
+  const scanChainsRef = useRef<Record<string, Promise<void>>>({});
+  const scanRoot = useCallback((root: string) => {
+    const run = async () => {
+      try {
+        const cached = await window.scanAPI.loadCachedFiles(root);
+        if (cached.length > 0) onRestore(root, cached);
+      } catch {
+        /* cache restore is best-effort — scan will fill in */
+      }
+      onStart(root);
+      try {
+        await window.scanAPI.startScan(
+          root,
+          (batch) => onBatch(root, batch),
+          (p) => onProgress(root, p),
+          () => onDone(root),
+          (message) => onError(root, message),
+          (patches) => onMetaBatch(root, patches),
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        onError(root, message);
+      }
+    };
+    const prev = scanChainsRef.current[root] ?? Promise.resolve();
+    const next = prev.then(run, run);
+    scanChainsRef.current[root] = next;
+    return next;
+  }, [onRestore, onStart, onBatch, onProgress, onDone, onError, onMetaBatch]);
+
+  // Restore + scan every root on mount and when the set grows; drop scan
+  // state for roots that were removed. New roots scan in parallel.
+  const previousRootsRef = useRef<string[]>([]);
+  useEffect(() => {
+    const prev = new Set(previousRootsRef.current);
+    const next = new Set(roots);
+    for (const root of roots) {
+      if (!prev.has(root)) void scanRoot(root);
+    }
+    for (const old of prev) {
+      if (!next.has(old)) onReset(old);
+    }
+    previousRootsRef.current = roots;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roots]);
+
+  // Auto re-scan the root the main-process watcher just saw change
+  // (Syncthing deliveries) — debounced there, fired here.
+  useEffect(() => {
+    const unsubscribe = window.scanAPI.onRootChanged((root) => {
+      void scanRoot(root);
+    });
+    return unsubscribe;
+  }, [scanRoot]);
+
+  /** Re-scan every root (Header scan button / R key). */
+  const rescanAll = useCallback(() => {
+    for (const root of rootsRef.current) void scanRoot(root);
+  }, [scanRoot]);
 
   // ---- scan actions ----
   const pickFolder = useCallback(async () => {
     try {
       const picked = await window.scanAPI.selectFolder();
-      if (picked) {
-        setFolder(picked);
-        localStorage.setItem("wiergise:lastFolder", picked);
-        setSelectedFolder(null);
-        onReset();
-        const cached = await window.scanAPI.loadCachedFiles(picked);
-        if (cached.length > 0) onRestore(cached);
-      }
+      if (!picked) return;
+      if (isKnownPath(picked)) return;
+      addRoot(picked);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      onError(message);
+      addToast({ message: `FOLDER PICK FAILED — ${message}`, variant: "error" });
     }
-  }, [onReset, onRestore, onError]);
-
-  const startScan = useCallback(async () => {
-    if (!folder) return;
-    onStart();
-    try {
-      await window.scanAPI.startScan(
-        folder,
-        onBatch,
-        (p: ScanProgress) => onProgress(p),
-        () => onDone(),
-        (message: string) => onError(message),
-        (patches) => onMetaBatch(patches),
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      onError(message);
-    }
-  }, [folder, onStart, onBatch, onProgress, onDone, onError, onMetaBatch]);
+  }, [isKnownPath, addRoot, addToast]);
 
   const cancelScan = useCallback(async () => {
     try {
@@ -317,8 +300,8 @@ export default function App() {
     } catch {
       /* best-effort */
     }
-    onCancelled();
-  }, [onCancelled]);
+    for (const root of Object.keys(rootStates)) onCancelled(root);
+  }, [rootStates, onCancelled]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -348,19 +331,21 @@ export default function App() {
         const p = getDroppedPath(e.dataTransfer.files[0]);
         if (p) droppedPath = p;
       }
-      if (droppedPath) {
-        setFolder(droppedPath);
-        localStorage.setItem("wiergise:lastFolder", droppedPath);
-        setSelectedFolder(null);
-        onReset();
-        void window.scanAPI.loadCachedFiles(droppedPath).then((cached) => {
-          if (cached.length > 0) onRestore(cached);
-        }).catch(() => {
-          /* best-effort restore */
-        });
+      if (!droppedPath) return;
+      if (isKnownPath(droppedPath)) {
+        // Inside the library: drill to the dropped folder (or, for a
+        // dropped media file, its containing folder).
+        const isFile = /\.[a-z0-9]{1,5}$/i.test(droppedPath);
+        setSelectedFolder(
+          isFile
+            ? droppedPath.replace(/[\\/][^\\/]+$/, "")
+            : droppedPath,
+        );
+      } else {
+        addRoot(droppedPath);
       }
     },
-    [onReset, onRestore],
+    [isKnownPath, addRoot],
   );
 
   // ---- file operations (organize & move) ----
@@ -524,6 +509,12 @@ export default function App() {
     clearSelection();
   }, [selectedIds, queueForTrash, clearSelection]);
 
+  /** Root that `path` lives under, or null (file-op state routing). */
+  const rootOf = useCallback(
+    (path: string) => roots.find((r) => isPathUnder(path, r)) ?? null,
+    [roots],
+  );
+
   /** Pull a staged file back into the grid — no disk operation ever happened. */
   const restoreFromQueue = useCallback((filePath: string) => {
     const entry = trashQueue.get(filePath);
@@ -533,8 +524,9 @@ export default function App() {
       next.delete(filePath);
       return next;
     });
-    onAddFiles([entry.file]);
-  }, [trashQueue, onAddFiles]);
+    const root = rootOf(entry.file.filePath);
+    if (root) onAddFiles(root, [entry.file]);
+  }, [trashQueue, rootOf, onAddFiles]);
 
   /** Commit a single staged file to the OS trash, now. */
   const deleteFromQueue = useCallback(async (filePath: string) => {
@@ -604,7 +596,8 @@ export default function App() {
         viewerFilePathRef.current = result.newPath;
       }
       onRemoveFiles(new Set([file.filePath]));
-      onAddFiles([renamed]);
+      const root = rootOf(file.filePath);
+      if (root) onAddFiles(root, [renamed]);
     }
     logActivity(
       "rename",
@@ -618,7 +611,7 @@ export default function App() {
       variant: result.ok ? "success" : "error",
     });
     return result;
-  }, [onRemoveFiles, onAddFiles, logActivity, addToast]);
+  }, [onRemoveFiles, rootOf, onAddFiles, logActivity, addToast]);
 
   /**
    * Revert a committed move/rename by running the inverse disk operation
@@ -721,6 +714,17 @@ export default function App() {
   const onGridCloseInspector = useCallback(() => {
     setActiveInspectFile(null);
   }, []);
+  const openSessionLog = useCallback(() => setShowSessionLog(true), []);
+  const clearActivityLog = useCallback(() => setActivityLog([]), []);
+  /** Stable identity — Sidebar and FolderBrowser are both `memo`ized, and
+   *  an inline arrow here changed on every App render, re-rendering the
+   *  whole folder tree (and every subfolder card) on each keystroke. */
+  const onFolderContextMenu = useCallback(
+    (folderPath: string, x: number, y: number) => {
+      setFolderContextMenu({ folderPath, x, y });
+    },
+    [],
+  );
 
   // ---- keyboard shortcuts (§11) ----
   // Refs so the keyboard handler can call latest handlers without deps churn.
@@ -750,11 +754,11 @@ export default function App() {
         void pickFolder();
         return;
       }
-      // Ctrl/Cmd+Enter — start scan
+      // Ctrl/Cmd+Enter — re-scan all roots
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
-        if (folderRef.current && scanStatusRef.current !== "scanning") {
-          void startScan();
+        if (rootsRef.current.length > 0 && scanStatusRef.current !== "scanning") {
+          rescanAll();
         }
         return;
       }
@@ -788,7 +792,6 @@ export default function App() {
           setShowSettings(false);
           return;
         }
-        if (viewerIndexRef.current !== null) return; // viewer handles its own Esc
         if (contextMenuRef.current) {
           setContextMenu(null);
           return;
@@ -825,7 +828,9 @@ export default function App() {
         if (f) setRenameDialogFile(f);
         return;
       }
-      // R — reload failed thumbnails (errored tiles re-fetch via cache-buster)
+      // R — reload failed thumbnails only. A full re-scan is Ctrl+Enter
+      // (or the Header Scan button); re-scanning here would clear the grid
+      // and unmount errored tiles before their retry can re-fetch.
       if (e.key.toLowerCase() === "r" && !inEditable && viewerIndexRef.current === null) {
         e.preventDefault();
         setReloadEpoch((n) => n + 1);
@@ -834,7 +839,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [pickFolder, startScan, clearSelection]);
+  }, [pickFolder, rescanAll, clearSelection]);
 
   // ---- derived data pipeline (§10) ----
   // useTags() returns a fresh object every render, but its fields are
@@ -857,14 +862,19 @@ export default function App() {
     // hidden folder (subtree match, case-insensitive).
     let visibleFiles = folderFiltered;
     if (hiddenFolders.size > 0) {
-      const hiddenNorms = [...hiddenFolders].map((h) =>
-        h.replace(/\\/g, "/").toLowerCase(),
-      );
+      // Normalize each hidden folder to its exact path AND its subtree
+      // prefix once, up front. Both were recomputed per file × per hidden
+      // folder inside the predicate — a string allocation for every one of
+      // (25k files × hidden folders) comparisons, on every batch.
+      const hiddenNorms = [...hiddenFolders].map((h) => {
+        const norm = h.replace(/\\/g, "/").toLowerCase();
+        return { exact: norm, prefix: norm.endsWith("/") ? norm : norm + "/" };
+      });
       visibleFiles = folderFiltered.filter(
-        (f) => !hiddenNorms.some((h) => {
-          const prefix = h.endsWith("/") ? h : h + "/";
-          return f.normPath === h || f.normPath.startsWith(prefix);
-        }),
+        (f) =>
+          !hiddenNorms.some(
+            (h) => f.normPath === h.exact || f.normPath.startsWith(h.prefix),
+          ),
       );
     }
 
@@ -900,27 +910,29 @@ export default function App() {
 
     const filteredCount = tagFiltered.length;
 
-    // 4. Sort (§10.2 iv). date is default.
+    // 4. Sort (§10.2 iv). date is default. The comparator is selected once
+    // rather than re-branching on `sortMode` inside every comparison —
+    // sorting 25k files runs the comparator ~360k times per pass, and a
+    // pass happens on every streamed scan batch.
     const sign = sortDir === "asc" ? 1 : -1;
-    const ordered = [...tagFiltered].sort((a, b) => {
-      if (sortMode === "name") {
-        return a.fileNameLower < b.fileNameLower
-          ? -sign
-          : a.fileNameLower > b.fileNameLower
-            ? sign
-            : 0;
-      }
-      if (sortMode === "size") {
-        return (a.sizeBytes - b.sizeBytes) * sign;
-      }
-      if (sortMode === "resolution") {
-        return (a.width * a.height - b.width * b.height) * sign;
-      }
-      // date
-      const tA = Number.isFinite(a.birthtimeMs) ? a.birthtimeMs : 0;
-      const tB = Number.isFinite(b.birthtimeMs) ? b.birthtimeMs : 0;
-      return (tA - tB) * sign;
-    });
+    const compare: (a: MediaFile, b: MediaFile) => number =
+      sortMode === "name"
+        ? (a, b) =>
+            a.fileNameLower < b.fileNameLower
+              ? -sign
+              : a.fileNameLower > b.fileNameLower
+                ? sign
+                : 0
+        : sortMode === "size"
+          ? (a, b) => (a.sizeBytes - b.sizeBytes) * sign
+          : sortMode === "resolution"
+            ? (a, b) => (a.width * a.height - b.width * b.height) * sign
+            : (a, b) => {
+                const tA = Number.isFinite(a.birthtimeMs) ? a.birthtimeMs : 0;
+                const tB = Number.isFinite(b.birthtimeMs) ? b.birthtimeMs : 0;
+                return (tA - tB) * sign;
+              };
+    const ordered = [...tagFiltered].sort(compare);
 
     // 5. Grouping (§10.3)
     if (groupMode === "none") {
@@ -1018,20 +1030,29 @@ export default function App() {
   // re-deriving everything each time. The deferred value drops intermediate
   // states and keeps the tree one commit behind fast mutations.
   const deferredFiles = useDeferredValue(files);
-  const folderTree = useMemo(
-    () => buildFolderTree(deferredFiles, folder || ""),
-    [deferredFiles, folder],
+  const libraryTree = useMemo(
+    () => buildLibraryTree(deferredFiles, roots),
+    [deferredFiles, roots],
   );
-  const totalFolders = useMemo(() => countFolders(folderTree), [folderTree]);
+  const totalFolders = useMemo(() => countFolders(libraryTree), [libraryTree]);
 
-  const isScanning = scan.status === "scanning";
-  const showIdleState = scan.status === "idle" && scan.count === 0;
+  const showIdleState = roots.length === 0;
 
   return (
     <MotionConfig reducedMotion={settings.reduceMotion ? "always" : "user"}>
       <div
+        // Floating docks (trash queue, batch toolbar, activity log) are
+        // `position: fixed`, so they sat ON TOP of the in-flow status
+        // footer whenever it was visible. One inherited variable lifts the
+        // whole dock row clear of it instead of each dock guessing.
+        style={
+          {
+            "--seele-dock-bottom":
+              scanStatus !== "idle" ? "52px" : "24px",
+          } as React.CSSProperties
+        }
         className={`h-screen w-screen flex flex-col bg-nerv-bg text-nerv-text overflow-hidden relative font-mono select-none ${
-        settings.reduceMotion ? "seele-reduce-motion" : ""
+        settings.reduceMotion ? "seele-reduce-motion" : "seele-motion-ok"
       } ${settings.dialogBlur ? "" : "seele-no-blur"}`}
       onDragEnter={(e) => {
         if (e.dataTransfer?.types?.includes("Files")) {
@@ -1043,8 +1064,14 @@ export default function App() {
         if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
       }}
       onDragLeave={(e) => {
+        // dragleave also fires when the pointer crosses into a child, so
+        // only clear the overlay once the pointer has left the window
+        // entirely. The `Files` guard must wrap the whole coordinate test —
+        // as `A && x || y || z` it applied to the first clause only, so any
+        // non-file drag leaving through an edge cleared the overlay.
+        if (!e.dataTransfer?.types?.includes("Files")) return;
         if (
-          (e.dataTransfer?.types?.includes("Files") && e.clientX <= 0) ||
+          e.clientX <= 0 ||
           e.clientY <= 0 ||
           e.clientX >= window.innerWidth ||
           e.clientY >= window.innerHeight
@@ -1066,7 +1093,7 @@ export default function App() {
       {/* CRT scanline overlay (v2.5 §2.4) */}
       <div className="crt-overlay" aria-hidden="true" />
 
-      <TitleBar folder={folder} />
+      <TitleBar roots={roots} />
 
       {/* Drag-and-drop overlay — styled NERV drop zone (decorative only;
           the app-root drag handlers above own enter/over/leave/drop). */}
@@ -1080,9 +1107,9 @@ export default function App() {
 
       {/* Header */}
       <Header
-        currentFolder={folder}
+        roots={roots}
         onPickFolder={pickFolder}
-        onScan={startScan}
+        onScan={rescanAll}
         scanning={isScanning}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
@@ -1099,7 +1126,7 @@ export default function App() {
         gridDensity={gridDensity}
         onGridDensityChange={setGridDensity}
         resultCount={resultCount}
-        totalCount={scan.count}
+        totalCount={totalCount}
         selectedCount={selectedIds.size}
         onOpenHelp={() => setShowHelp(true)}
         onOpenPalette={() => setShowPalette(true)}
@@ -1110,22 +1137,22 @@ export default function App() {
       />
 
       {/* Status strip (compact, below header) */}
-      {(isScanning || scan.status !== "idle") && (
+      {(isScanning || scanStatus !== "idle") && (
         <div className="no-drag flex items-center gap-3 px-4 h-7 border-b border-nerv-border/40 text-[10px] font-mono flex-shrink-0 z-20 bg-nerv-panel/40">
           {isScanning ? (
             <>
               <span className="text-nerv-amber font-semibold">
-                {scan.count.toLocaleString()} files found
+                {totalCount.toLocaleString()} files found
               </span>
               <div className="h-px flex-1 max-w-[200px] bg-nerv-panel-2 overflow-hidden">
                 <div className="h-full w-1/3 bg-nerv-orange animate-pulse" />
               </div>
-              {scan.progress && (
+              {scanProgress && (
                 <span
                   className="text-nerv-muted/70 truncate max-w-[220px]"
-                  title={scan.progress.currentDir}
+                  title={scanProgress.currentDir}
                 >
-                  {scan.progress.currentDir}
+                  {scanProgress.currentDir}
                 </span>
               )}
               <button
@@ -1139,21 +1166,21 @@ export default function App() {
           ) : (
             <span
               className={`font-semibold tracking-wider ${
-                scan.status === "done"
+                scanStatus === "done"
                   ? "text-nerv-green"
-                  : scan.status === "cancelled"
+                  : scanStatus === "cancelled"
                     ? "text-nerv-amber"
                     : "text-nerv-red"
               }`}
             >
-              {scan.status === "done"
-                ? `SCAN COMPLETE · ${scan.count.toLocaleString()} FILES`
-                : scan.status === "cancelled"
-                  ? `CANCELLED · ${scan.count.toLocaleString()} FILES`
+              {scanStatus === "done"
+                ? `SCAN COMPLETE · ${totalCount.toLocaleString()} FILES`
+                : scanStatus === "cancelled"
+                  ? `CANCELLED · ${totalCount.toLocaleString()} FILES`
                   : "SCAN FAILED"}
             </span>
           )}
-          {scan.status === "done" && (
+          {scanStatus === "done" && (
             <span className="ml-auto text-nerv-muted">
               {stats.imageCount.toLocaleString()} img ·{" "}
               {stats.videoCount.toLocaleString()} vid ·{" "}
@@ -1164,13 +1191,13 @@ export default function App() {
       )}
 
       {/* Error banner */}
-      {scan.status === "error" && scan.error && (
+      {scanStatus === "error" && scanError && (
         <div className="flex items-center gap-2 text-[10px] font-mono text-nerv-amber bg-nerv-amber/5 border-b border-nerv-amber/30 px-4 h-7 flex-shrink-0 z-20">
-          <span className="font-bold">{scan.error}</span>
+          <span className="font-bold">{scanError}</span>
           <button
             type="button"
             className="text-nerv-muted hover:text-nerv-amber underline ml-auto"
-            onClick={onReset}
+            onClick={() => onReset()}
           >
             dismiss
           </button>
@@ -1181,8 +1208,12 @@ export default function App() {
       <div className="flex flex-1 min-h-0 relative z-10">
         <Sidebar
           open={sidebarOpen}
-          tree={folderTree}
+          tree={libraryTree}
           totalFolders={totalFolders}
+          roots={roots}
+          onAddRoot={pickFolder}
+          onRemoveRoot={removeRoot}
+          rootStates={rootStates}
           selectedFolder={selectedFolder}
           onSelectFolder={setSelectedFolder}
           hiddenFolders={hiddenFolders}
@@ -1198,9 +1229,7 @@ export default function App() {
           onAddTag={tagSystem.addTag}
           onRemoveTag={tagSystem.removeTag}
           onToggleActiveTag={tagSystem.toggleActiveTag}
-          onFolderContextMenu={(folderPath, x, y) =>
-            setFolderContextMenu({ folderPath, x, y })
-          }
+          onFolderContextMenu={onFolderContextMenu}
         />
 
         {/* Main content */}
@@ -1220,18 +1249,12 @@ export default function App() {
               </svg>
               <div className="flex flex-col gap-1.5">
                 <p className="text-nerv-amber tracking-widest text-base uppercase font-bold">
-                  Select a folder to begin
+                  Add a folder to your library
                 </p>
                 <p className="text-nerv-muted/60 text-xs max-w-xs">
-                  Open a folder, then press{" "}
-                  <kbd className="px-1.5 py-0.5 border border-nerv-orange/40 text-nerv-orange text-[10px]">
-                    Ctrl
-                  </kbd>
-                  +
-                  <kbd className="px-1.5 py-0.5 border border-nerv-orange/40 text-nerv-orange text-[10px]">
-                    Enter
-                  </kbd>{" "}
-                  to scan.
+                  Library roots scan automatically — Syncthing-delivered
+                  files appear without lifting a finger. Add one or more
+                  folders (Pictures, DCIM, Downloads...).
                 </p>
               </div>
               <button
@@ -1239,21 +1262,19 @@ export default function App() {
                 className="mt-2 px-5 py-2 bg-nerv-orange hover:bg-nerv-amber text-nerv-bg font-mono font-bold text-xs uppercase transition-colors duration-150 cursor-pointer shadow-[0_0_12px_rgba(255,152,48,0.3)]"
                 onClick={pickFolder}
               >
-                Open folder...
+                Add folder...
               </button>
             </div>
           ) : viewMode === "folders" ? (
             <FolderBrowser
-              tree={folderTree}
+              tree={libraryTree}
               currentFolder={selectedFolder}
               onSelectFolder={setSelectedFolder}
               files={files}
               totalBytes={stats.totalSizeBytes}
               hiddenFolders={hiddenFolders}
               onToggleHideFolder={toggleHideFolder}
-              onFolderContextMenu={(folderPath, x, y) =>
-                setFolderContextMenu({ folderPath, x, y })
-              }
+              onFolderContextMenu={onFolderContextMenu}
             />
           ) : groups.length === 0 || resultCount === 0 ? (
             <div className="w-full h-full flex flex-col items-center justify-center text-nerv-muted gap-3 animate-fade-in">
@@ -1300,25 +1321,25 @@ export default function App() {
         </main>
       </div>
       {/* Footer status telemetry bar (v2.5 §1b) */}
-      {scan.status !== "idle" && (
+      {scanStatus !== "idle" && (
         <footer className="flex items-center gap-3 px-4 h-7 border-t border-nerv-border/60 bg-nerv-panel/40 text-[10px] font-mono flex-shrink-0 z-20">
           <span className="text-nerv-text-dim tracking-wider">STATUS</span>
           <span
             className={`font-bold tracking-wider ${
-              scan.status === "done"
+              scanStatus === "done"
                 ? "text-nerv-green"
-                : scan.status === "scanning"
+                : scanStatus === "scanning"
                   ? "text-nerv-orange"
-                  : scan.status === "error"
+                  : scanStatus === "error"
                     ? "text-nerv-red"
                     : "text-nerv-text-dim"
             }`}
           >
-            {scan.status === "done"
+            {scanStatus === "done"
               ? "\u25CF NOMINAL"
-              : scan.status === "scanning"
+              : scanStatus === "scanning"
                 ? "\u25CF ACTIVE"
-                : scan.status === "error"
+                : scanStatus === "error"
                   ? "\u25CF FAULT"
                   : "\u25CF IDLE"}
           </span>
@@ -1505,7 +1526,7 @@ export default function App() {
 
       {/* Floating batch action toolbar */}
       {selectedIds.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-stretch shadow-[0_4px_24px_rgba(0,0,0,0.5)]">
+        <div className="fixed bottom-[var(--seele-dock-bottom)] left-1/2 -translate-x-1/2 z-40 flex items-stretch shadow-[0_4px_24px_rgba(0,0,0,0.5)]">
           {/* Counter badge */}
           <div className="eva-ticket flex items-center gap-2 px-4 bg-nerv-orange/15 border border-nerv-orange">
             <span className="text-nerv-orange font-bold text-sm tabular-nums">
@@ -1579,6 +1600,8 @@ export default function App() {
             type="button"
             className="eva-ticket px-3 flex items-center bg-nerv-panel border border-l-0 border-nerv-border hover:border-nerv-muted hover:bg-nerv-panel-2 transition-colors group"
             onClick={clearSelection}
+            title="Clear selection"
+            aria-label="Clear selection"
           >
             <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-nerv-muted group-hover:text-nerv-text">
               ✕
@@ -1624,9 +1647,9 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {moveDialogPaths && folderTree && (
+      {moveDialogPaths && libraryTree && (
         <MoveDialog
-          tree={folderTree}
+          tree={libraryTree}
           count={moveDialogPaths.length}
           onClose={() => setMoveDialogPaths(null)}
           onConfirm={handleMoveConfirm}
@@ -1652,25 +1675,17 @@ export default function App() {
         />
       )}
 
+      {/* Activity dock (bottom-right). The full audit trail — the only
+          place a move/rename can be reverted — opens from inside its
+          panel header. It used to be a second floating badge pinned to
+          `bottom-6 left-1/2`, i.e. the exact coordinates of the batch
+          action toolbar above, so it was unreachable whenever anything
+          was selected. */}
       <ActivityLog
         entries={activityLog}
-        onClear={() => setActivityLog([])}
+        onClear={clearActivityLog}
+        onOpenFullLog={openSessionLog}
       />
-
-      {/* Session log badge button — opens full audit trail modal */}
-      {activityLog.length > 0 && (
-        <button
-          type="button"
-          onClick={() => setShowSessionLog(true)}
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-4 py-1.5 bg-nerv-panel border border-nerv-orange/40 text-nerv-orange text-[10px] font-mono font-bold tracking-wider hover:bg-nerv-orange/10 hover:shadow-[0_0_12px_rgba(255,152,48,0.3)] transition-[background-color,color,box-shadow]"
-        >
-          <span className="w-1.5 h-1.5 bg-nerv-orange animate-pulse-soft" />
-          SESSION LOG
-          <span className="tag-chip bg-nerv-orange/20 px-1.5 py-0.5 text-[9px]">
-            {activityLog.length}
-          </span>
-        </button>
-      )}
 
       {/* Overlays */}
       <AnimatePresence>{showHelp && <KeyboardHelp onClose={() => setShowHelp(false)} />}</AnimatePresence>
@@ -1716,7 +1731,7 @@ export default function App() {
         <button
           type="button"
           onClick={() => setShowTrashQueue(true)}
-          className="fixed bottom-6 left-6 z-40 flex items-center gap-2 px-4 py-1.5 bg-nerv-panel border border-nerv-red/40 text-nerv-red text-[10px] font-mono font-bold tracking-wider hover:bg-nerv-red/10 hover:shadow-[0_0_12px_rgba(255,77,48,0.3)] transition-[background-color,color,box-shadow]"
+          className="fixed bottom-[var(--seele-dock-bottom)] left-6 z-40 flex items-center gap-2 px-4 py-1.5 bg-nerv-panel border border-nerv-red/40 text-nerv-red text-[10px] font-mono font-bold tracking-wider hover:bg-nerv-red/10 hover:shadow-[0_0_12px_rgba(255,77,48,0.3)] transition-[background-color,color,box-shadow]"
         >
           <span className="w-1.5 h-1.5 bg-nerv-red animate-pulse-soft" />
           TRASH QUEUE

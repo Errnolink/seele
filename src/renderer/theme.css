@@ -18,6 +18,7 @@
   --color-nerv-bg: #000000;          /* True NERV black background */
   --color-nerv-panel: #0a0a0c;       /* Secondary dark panel */
   --color-nerv-panel-2: #121214;     /* Raised surface / input background */
+  --color-nerv-panel-hi: #17171c;    /* Card headers / chips — one step above panel-2 */
   --color-nerv-border: #1f1f23;      /* Hairline borders */
   --color-nerv-border-highlight: #2e2e34; /* Active / hover border */
 

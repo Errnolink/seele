@@ -7,26 +7,30 @@
  *
  * Extracted from App.tsx (de-monolith) — behavior unchanged.
  */
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { MediaFile, MediaId } from "../types";
 
 export function useFavorites() {
   const [favorites, setFavorites] = useState<Set<MediaId>>(new Set());
+  // Latest-value ref so `toggleFavorite` can read current membership
+  // without listing `favorites` as a dependency. With that dependency the
+  // callback got a new identity on every star, which propagated through
+  // App's toast wrapper into MasonryGrid and re-rendered every mounted
+  // tile instead of just the one that changed.
+  const favoritesRef = useRef(favorites);
+  favoritesRef.current = favorites;
 
   /** Toggle one file; returns true when ADDED, false when REMOVED. */
-  const toggleFavorite = useCallback(
-    (file: MediaFile) => {
-      const adding = !favorites.has(file.filePath);
-      setFavorites((prev) => {
-        const next = new Set(prev);
-        if (next.has(file.filePath)) next.delete(file.filePath);
-        else next.add(file.filePath);
-        return next;
-      });
-      return adding;
-    },
-    [favorites],
-  );
+  const toggleFavorite = useCallback((file: MediaFile) => {
+    const adding = !favoritesRef.current.has(file.filePath);
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(file.filePath)) next.delete(file.filePath);
+      else next.add(file.filePath);
+      return next;
+    });
+    return adding;
+  }, []);
 
   /** Flip membership for every path in `paths` in a single setState. */
   const toggleFavoriteMany = useCallback((paths: Iterable<string>) => {

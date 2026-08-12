@@ -6,14 +6,14 @@ import type { MediaFile } from "../src/scanner/types";
 /**
  * On-disk metadata cache for scanned media (v4 rework).
  *
- * Stores the full file list from the last scan plus any dimensions the
- * renderer has measured (from thumbnail <img> naturalWidth/Height). This
- * lets the app restore a previously scanned folder instantly at startup
- * — no filesystem walk, no header reads, no thumbnail decoding needed
- * to show the masonry at correct aspect ratios.
+ * Stores the full file list from the last scan of every library root plus
+ * any dimensions the renderer has measured (from thumbnail <img>
+ * naturalWidth/Height). This lets the app restore all scanned roots
+ * instantly at startup — no filesystem walk, no header reads, no
+ * thumbnail decoding needed to show the masonry at correct aspect ratios.
  *
  * Structure (single JSON file in userData):
- *   { folder: string, files: MediaFile[], dims: { [path]: {w,h} } }
+ *   { folders: { [rootPath]: { files: MediaFile[], dims: { [path]: {w,h} } } } }
  *
  * The main process writes files on scan completion and merges dims as
  * the renderer reports them. Atomic writes (tmp + rename) prevent
@@ -25,23 +25,28 @@ interface DimEntry {
   h: number;
 }
 
-interface CacheShape {
-  folder: string;
+interface CacheFolder {
   files: MediaFile[];
   dims: Record<string, DimEntry>;
+}
+
+interface CacheShape {
+  /** Keyed by the root folder path as passed by the caller. */
+  folders: Record<string, CacheFolder>;
 }
 
 const CACHE_FILENAME = "media-cache.json";
 
 let cachePath = "";
 let loaded = false;
-let cache: CacheShape = { folder: "", files: [], dims: {} };
+let cache: CacheShape = { folders: {} };
 let dirty = false;
 /** Coalesced flush timer — absorbs bursts of dimension reports. */
 let flushTimer: NodeJS.Timeout | null = null;
-/** Persistent path→index lookup so recordDimensions is O(1) per entry
- * instead of rebuilding a 50k-entry Map every call (v4 review M-4). */
-let fileIndexByPath: Map<string, number> = new Map();
+/** Persistent path→{folder,index} lookup so recordDimensions is O(1) per
+ *  entry instead of rebuilding a 50k-entry Map every call (v4 review M-4). */
+let fileIndexByPath: Map<string, { folder: string; index: number }> =
+  new Map();
 
 /** Lazily resolve the cache file path under userData. */
 function ensurePath(): string {
@@ -51,9 +56,14 @@ function ensurePath(): string {
   return cachePath;
 }
 
-/** Rebuild the persistent path→index lookup from the current files array. */
+/** Rebuild the persistent path→location lookup from all cached folders. */
 function rebuildIndex(): void {
-  fileIndexByPath = new Map(cache.files.map((f, i) => [f.filePath, i]));
+  fileIndexByPath = new Map();
+  for (const [folder, entry] of Object.entries(cache.folders)) {
+    entry.files.forEach((f, i) => {
+      fileIndexByPath.set(f.filePath, { folder, index: i });
+    });
+  }
 }
 
 /** Read the cache from disk (once per process). */
@@ -62,16 +72,33 @@ function load(): void {
   loaded = true;
   try {
     const raw = fs.readFileSync(ensurePath(), "utf-8");
-    const parsed = JSON.parse(raw) as Partial<CacheShape>;
-    cache = {
-      folder: parsed.folder ?? "",
-      files: Array.isArray(parsed.files) ? parsed.files : [],
-      dims: parsed.dims ?? {},
+    const parsed = JSON.parse(raw) as Partial<CacheShape> & {
+      folder?: string;
+      files?: MediaFile[];
+      dims?: Record<string, DimEntry>;
     };
+    if (parsed.folders && typeof parsed.folders === "object") {
+      cache = {
+        folders: parsed.folders as Record<string, CacheFolder>,
+      };
+    } else if (typeof parsed.folder === "string" && parsed.folder.length > 0) {
+      // Pre-multi-root shape: a single folder. Adopt it as that folder's
+      // entry so the first launch after the upgrade keeps its cache.
+      cache = {
+        folders: {
+          [parsed.folder]: {
+            files: Array.isArray(parsed.files) ? parsed.files : [],
+            dims: parsed.dims ?? {},
+          },
+        },
+      };
+    } else {
+      cache = { folders: {} };
+    }
   } catch (e) {
     // Corrupt or missing cache — start fresh.
     if (process.env.NODE_ENV !== "production") console.debug("[mediaCache] load failed:", e);
-    cache = { folder: "", files: [], dims: {} };
+    cache = { folders: {} };
   }
   rebuildIndex();
 }
@@ -113,18 +140,25 @@ function scheduleFlush(): void {
 }
 
 /**
- * Store the full file list from a completed scan (called by main when the
- * worker reports "done"). Dimensions from any prior scan of the same
- * folder are preserved; dims for files no longer present are dropped.
+ * Store the full file list from a completed scan of `folderPath` (called
+ * by main when the worker reports "done"). Dimensions from any prior scan
+ * of the same folder are preserved; dims for files no longer present are
+ * dropped. Other roots' entries are untouched.
  */
 export function recordScanResult(folderPath: string, files: MediaFile[]): void {
   load();
+  const prior = cache.folders[folderPath];
   const survivingDims: Record<string, DimEntry> = {};
   const fileSet = new Set(files.map((f) => f.filePath));
-  for (const [p, d] of Object.entries(cache.dims)) {
+  for (const [p, d] of Object.entries(prior?.dims ?? {})) {
     if (fileSet.has(p)) survivingDims[p] = d;
   }
-  cache = { folder: folderPath, files, dims: survivingDims };
+  cache = {
+    folders: {
+      ...cache.folders,
+      [folderPath]: { files, dims: survivingDims },
+    },
+  };
   rebuildIndex();
   dirty = true;
   scheduleFlush();
@@ -137,10 +171,23 @@ export function removeFiles(filePaths: string[]): void {
   if (filePaths.length === 0) return;
   load();
   const remove = new Set(filePaths);
-  const before = cache.files.length;
-  cache.files = cache.files.filter((f) => !remove.has(f.filePath));
-  for (const p of remove) delete cache.dims[p];
-  if (cache.files.length !== before) {
+  let changed = false;
+  const nextFolders: Record<string, CacheFolder> = {};
+  for (const [folder, entry] of Object.entries(cache.folders)) {
+    const before = entry.files.length;
+    const files = entry.files.filter((f) => !remove.has(f.filePath));
+    let dims = entry.dims;
+    for (const p of remove) {
+      if (p in dims) {
+        if (dims === entry.dims) dims = { ...dims };
+        delete dims[p];
+      }
+    }
+    if (files.length !== before || dims !== entry.dims) changed = true;
+    nextFolders[folder] = { files, dims };
+  }
+  if (changed) {
+    cache = { folders: nextFolders };
     rebuildIndex();
     dirty = true;
     scheduleFlush();
@@ -159,15 +206,16 @@ export function recordDimensions(
   let changed = false;
   for (const { filePath, width, height } of entries) {
     if (width <= 0 || height <= 0) continue;
-    const prev = cache.dims[filePath];
+    const loc = fileIndexByPath.get(filePath);
+    if (!loc) continue;
+    const entry = cache.folders[loc.folder];
+    if (!entry) continue;
+    const prev = entry.dims[filePath];
     if (prev && prev.w === width && prev.h === height) continue;
-    cache.dims[filePath] = { w: width, h: height };
+    entry.dims[filePath] = { w: width, h: height };
     changed = true;
     // Also patch the MediaFile so loadCachedFiles returns up-to-date dims.
-    const idx = fileIndexByPath.get(filePath);
-    if (idx !== undefined) {
-      cache.files[idx] = { ...cache.files[idx], width, height };
-    }
+    entry.files[loc.index] = { ...entry.files[loc.index], width, height };
   }
   if (changed) {
     dirty = true;
@@ -176,21 +224,13 @@ export function recordDimensions(
 }
 
 /**
- * Return all cached files for a folder as `MediaFile[]`. Used at app start
+ * Return all cached files for a root as `MediaFile[]`. Used at app start
  * so the gallery appears instantly while a real scan refreshes in the
  * background.
  */
 export function loadCachedFiles(folderPath: string): MediaFile[] {
   load();
-  if (cache.folder !== folderPath) return [];
-  return cache.files;
-}
-
-/** Whether the cache has any entries for the given folder. */
-export function hasCachedFiles(folderPath: string): boolean {
-  load();
-  if (cache.folder !== folderPath) return false;
-  return cache.files.length > 0;
+  return cache.folders[folderPath]?.files ?? [];
 }
 
 /** Flush any pending writes on quit. Sync because the app is exiting
