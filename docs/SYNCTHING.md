@@ -7,13 +7,13 @@ Keep your phone's camera roll, downloads, and screenshots in Seele automatically
 One Syncthing destination folder **per phone directory**, as siblings on the PC:
 
 ```
-D:\Jevesh\Oneplus-12\
+D:\<Phone>\
 ├── Pictures\      ← phone Pictures / DCIM/Camera → Seele root
 ├── Downloads\     ← phone Downloads             → Seele root
 └── Screenshots\   ← optional                    → Seele root
 ```
 
-**Single-root variant**: a phone that pushes one folder containing category subdirectories (e.g. `Onepiss 12\` with `Screenshots/`, `Wallpaper/`, `Pixez/`, …) works the same — add that one folder as a Seele root and browse the categories via the folder tree.
+**Single-root variant**: a phone that pushes one folder containing category subdirectories (e.g. `<Phone>\` with `Screenshots/`, `Wallpaper/`, `Pixez/`, …) works the same — add that one folder as a Seele root and browse the categories via the folder tree.
 
 Add each destination folder to Seele via the sidebar **LIBRARY ROOTS → ADD ROOT** (or drop it onto the window). Seele merges all roots into one library.
 
@@ -31,7 +31,7 @@ Repeat per directory (`phone-downloads` → `Downloads`, `phone-screenshots` →
 
 For each phone folder:
 
-1. Add Folder with the **matching folder ID** (e.g. `phone-pictures`), path `D:\Jevesh\Oneplus-12\Pictures`.
+1. Add Folder with the **matching folder ID** (e.g. `phone-pictures`), path `D:\<Phone>\Pictures`.
 2. **Folder Type: Receive Only** — mirrors the phone direction and pins the contents to exactly what the phone pushed.
 
 ## How it plays with Seele

@@ -99,7 +99,10 @@ Each root scans independently and concurrently; re-scanning one root cancels onl
   - RAM: LRU `Map`, max 150 entries.
   - Disk: sha1 of the cache key, sharded `%LOCALAPPDATA%\seele\Cache\thumbs\<2-hex>\<sha1>` on Windows (`userData/thumbs` elsewhere); budget 5000 files + byte cap, oldest-first eviction (`pruneThumbCache`, throttled to 1/min + at startup).
   - Cache keys are distinct per pipeline: `?w=` static, `?w=&vid=1` video, `?w=&gifanim=1` animated GIF, `?w=&heic=1` ffmpeg fallback. The renderer's `&retry=N` cache-buster is **never part of any key**.
+- Encoding: resized JPEGs use plain libjpeg-turbo, **not mozjpeg**. mozjpeg buys ~20% smaller files for ~270ms/image of extra encode time (measured on 9400×4000 sources) — the wrong trade for a locally-served cache the user is actively waiting on, especially one that already has a byte budget + eviction. Alpha-bearing sources (PNG/GIF/WebP) still encode as PNG so transparency survives.
 - Concurrency: sharp/ffmpeg semaphores sized from settings (`decodeConcurrency`; ffmpeg ≈ half). Header sniffing is memoized (size+mtime key) to avoid re-opening source files on cache hits.
+- **Decode priority (v2.7.1)**: the sharp gate is a shared resource, so work that is not on screen must not race work that is. Opening a viewer image used to fire, simultaneously: the `?w=1920` preview, both neighbour prefetches, and `file:insights` (three more sharp ops) — four jobs for four permits, with the visible image given no priority. The renderer now holds the neighbour prefetch and the insights fetch until the current preview's `onLoad`. Measured contention removed: ~770ms per open on large sources.
+- **Irreducible cost**: on 37MP sources (9400×4000) a single `?w=1920` decode is ~1.0s and cannot be optimized away — libvips' JPEG shrink-on-load *is* engaging (w=512 ≈ 870ms vs w=3840 ≈ 1830ms, so time scales with target), and `.rotate()` does not defeat it. First open of a given image pays this; every later open is a disk-cache hit, which is why scrolling (cached tile thumbs) feels smooth while first-open does not.
 - **R key = reload failed thumbnails only**: bumps `reloadEpoch`; errored tiles re-request with `&retry=N` (fresh ffmpeg/sharp attempt — transient failures heal). It does **not** re-scan (that's Ctrl+Enter / the Header Scan button) — re-scanning would unmount the grid and the errored tiles' retry before it could fire.
 
 ## Data & cache contracts
@@ -159,6 +162,7 @@ Written on scan completion and dimension batches; flushed on quit. `recordDimens
 - Renderer sandboxed; no `nodeIntegration`; all privileged APIs behind `contextBridge`.
 - `media://` and shell/file IPC are guarded by `isUnderAllowedRoot` against the add-only `allowedRoots` set (path-traversal reads of arbitrary locations are rejected).
 - File operations resolve + re-check paths: both source and destination must resolve under an allowed root. Cross-root moves work (all library roots stay whitelisted); moves to arbitrary locations are rejected.
+- `dialog:pickMoveTarget` also rejects (returns `null`) a directory outside every root, so the picker can only ever yield a destination `file:move` will accept. It previously returned the path and let the move fail with `forbidden`, surfacing as an unexplained failed move.
 - Malformed URLs / bad payloads are rejected, not thrown, inside handlers.
 
 ## Data locations

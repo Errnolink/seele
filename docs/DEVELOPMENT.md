@@ -5,12 +5,17 @@ Setup, commands, workflow, verification, and machine-specific gotchas.
 ## Prerequisites
 
 - Node.js ≥ 24 (this machine: 24.18.0), npm.
-- **ffmpeg on PATH** — required for video thumbnails (and HEIC fallback). Seele finds it via `where ffmpeg` / `which ffmpeg` at first use. This machine: `C:\msys64\ucrt64\bin\ffmpeg.exe` (MSYS2) or the WinGet link. Without it, video tiles show `NO THUMBNAIL` and R can't help.
-- Windows PowerShell execution policy blocks npm/pip scripts — run npm through `cmd /c`, e.g.:
+- **ffmpeg on PATH** — required for video thumbnails (and HEIC fallback). Seele finds it via `where ffmpeg` / `which ffmpeg` at first use. On Windows, MSYS2 (`<msys2>\ucrt64\bin\ffmpeg.exe`) and the WinGet package both work. Without it, video tiles show `NO THUMBNAIL` and R can't help.
+- npm scripts run **directly in PowerShell** on this machine (verified v2.7.1):
 
 ```powershell
-cmd /c "cd /d C:\Users\Chef\Documents\Errnolink\Seele && npm run typecheck"
+cd <repo>; npm run typecheck
 ```
+
+  Earlier revisions of this doc said the execution policy blocked npm and to
+  wrap everything in `cmd /c "…"`. That is no longer true here, and the
+  `cmd /c` form is actively worse: invoked from a non-interactive shell it
+  can drop into an interactive prompt and hang instead of running.
 
 ## Commands
 
@@ -25,6 +30,8 @@ cmd /c "cd /d C:\Users\Chef\Documents\Errnolink\Seele && npm run typecheck"
 | `npm run build:electron` | `tsc -p tsconfig.node.json` → `dist-electron/`. |
 | `npm run build:renderer` | `vite build` → `dist/`. |
 | `npm run build` | Both, in order. |
+| `node scripts/make-fixture.mjs` | Build the throwaway E2E library + isolated profile. |
+| `node scripts/e2e-smoke.mjs <port> <fixtureRoot>` | Drive the running app over CDP; 21 checks, non-zero exit on failure. |
 
 ## Dev workflow
 
@@ -36,34 +43,68 @@ cmd /c "cd /d C:\Users\Chef\Documents\Errnolink\Seele && npm run typecheck"
 ## Verification (run before finishing any change)
 
 ```powershell
-cmd /c "cd /d C:\Users\Chef\Documents\Errnolink\Seele && npm run typecheck && npm run lint && npm test && npm run build"
+cd <repo>; npm run typecheck; npm run lint; npm test; npm run build
 ```
 
-All four must pass. Main-process changes specifically need `npm run build:electron` to validate the CJS output (typecheck alone doesn't catch require/ESM issues — see chokidar v5).
+All four must pass. Main-process changes specifically need `npm run build:electron` to validate the CJS output (typecheck alone doesn't catch require/ESM issues — see chokidar v5). For behavioral changes to file ops or the grid, also run the E2E smoke suite below.
 
 ## Running production mode
 
 ```powershell
-cmd /c "cd /d C:\Users\Chef\Documents\Errnolink\Seele && npx electron ."
+cd <repo>; npx electron .
 ```
 
 Loads the built `dist/index.html` + `dist-electron/electron/main.js`. For a testable instance add `--remote-debugging-port=9223` and drive it over CDP (below).
 
-## UI smoke testing (no native dialogs)
+## E2E smoke testing (`scripts/`)
 
-Native folder pickers can't be automated. To test with specific roots:
+Native folder pickers can't be automated, so the suite seeds an **isolated
+profile** instead of touching the user's real state. Nothing needs backing
+up or restoring.
 
-1. Back up the user's real state, then seed `settings.json`:
-   `%APPDATA%\seele\settings.json` → set `"roots": ["C:\\…\\root-a", …]`. (`media-cache.json` optional — the app re-scans.)
-2. Start vite + electron with CDP: `npx vite --port 5173`, then `npx electron . --remote-debugging-port=9222` (optionally with `VITE_DEV_SERVER_URL=http://localhost:5173` for dev).
-3. Drive via CDP. Working pattern (browser tool, `app.cdp_url`):
-   ```js
-   await wait(() => tab.evaluate(() => Boolean(document.querySelector("…"))));
-   const txt = await tab.evaluate(() => document.body.innerText);
-   ```
-   There is no `document` in the run scope — always `tab.evaluate(...)`.
-4. The watcher can be exercised by copying files into a root (sharp/ffmpeg generate test media; see `AppData/Local/Temp/seele-smoke2/gen-videos.js` pattern — write a temp `.js` and `node file.js`, because `node -e` quoting is unreliable through cmd/PowerShell).
-5. **Restore** the user's real `settings.json` / `media-cache.json` from backups and quit the app before restoring (main flushes on quit; don't overwrite a live file).
+```powershell
+# 1. Build the throwaway library + profile (prints resolved paths)
+node scripts/make-fixture.mjs                       # → %TEMP%\seele-e2e\
+
+# 2. Launch a second instance against it, with CDP.
+#    --user-data-dir redirects app.getPath("userData"), so this instance has
+#    its own settings.json/media-cache.json. There is no single-instance
+#    lock, so the user's app can stay open alongside it.
+$env:VITE_DEV_SERVER_URL = 'http://localhost:5173'   # omit for prod mode
+.\node_modules\electron\dist\electron.exe . `
+  --remote-debugging-port=9223 `
+  "--user-data-dir=$env:TEMP\seele-e2e\seele-userdata"
+
+# 3. Drive it (21 checks; exits non-zero on failure)
+node scripts/e2e-smoke.mjs 9223 "$env:TEMP\seele-e2e\seele-fixture"
+```
+
+`scripts/e2e-smoke.mjs` needs **no dependencies** — Node 22+ has a native
+`WebSocket`, so it speaks CDP directly (`GET /json/list` → `webSocketDebuggerUrl`
+→ `Runtime.evaluate`). It dispatches real `MouseEvent`/`KeyboardEvent`s on
+real elements, so actual React handlers and IPC run, and asserts on the
+**filesystem** after each op (staged delete leaves files on disk, restore
+returns them, Empty Queue commits to the OS trash, rename/move land on disk).
+
+### Gotchas that will bite you
+
+- **Never edit `src/**` while the suite is running.** Vite HMR reloads the
+  renderer, the CDP page target dies, and every in-flight request hangs. The
+  harness has a 20s per-request timeout so this now fails loudly instead of
+  hanging forever — but the run is still invalid.
+- **Scope button lookups.** A document-wide search for the `✕` glyph also
+  matches the sidebar's *remove library root* button; a naive close-modal
+  click silently deleted the library root mid-run. Use the harness's
+  `modalWith(text)` / `qbtn(modal, text)` / `pbtn(text)` helpers, which
+  address dialogs by their content rather than by position or glyph.
+- **`electron/**` edits need `npm run build:electron` + an instance restart**
+  before the suite sees them; main-process code does not hot-reload.
+- Set React input values through the native setter
+  (`Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set`)
+  plus an `input` event — a plain `el.value = …` is ignored by React.
+
+The watcher can be exercised by copying files into a fixture root while the
+instance runs (2s debounce, then a re-scan of that root).
 
 ## Machine gotchas
 

@@ -10,8 +10,10 @@ Local media file scanner and browser (formerly Wiergise) — an Electron + React
 - Fullscreen file viewer with filmstrip navigation, zoom/pan, and keyboard controls
 - Inspector panels (split view + fullscreen side panel) with tags, quick actions, file details, color spectrum, EXIF camera data, and file hash
 - Tag system, favorites, move/rename/trash with a staged (reversible) trash queue and session-changes export
-- Fast thumbnail pipeline: server-side sharp/ffmpeg resizing, RAM + disk caches with eviction
+- **Nothing is deleted until you commit it** — `Delete` only stages files; they stay on disk and can be restored instantly. Emptying the queue needs a second confirm and sends files to the OS trash (recoverable from the Recycle Bin), never an unlink
+- Fast thumbnail pipeline: server-side sharp/ffmpeg resizing, RAM + disk caches with eviction; on-screen media always gets decode priority over prefetch and metadata work
 - Command palette (Ctrl+K), analytics, settings with performance mode / reduced motion / decode concurrency controls
+- Keyboard-navigable throughout, with a visible focus ring, ARIA tree/dialog semantics, and an OS-reduced-motion default you can override
 
 ## Documentation
 
@@ -34,10 +36,11 @@ npm run dev        # vite (HMR) + tsc --watch + electron
 | `npm run scan` | Run the scanner CLI |
 | `npm run typecheck` | Typecheck renderer + electron projects |
 | `npm run lint` | ESLint (flat config) |
-| `npm test` | Vitest suite |
+| `npm test` | Vitest suite (60 unit tests) |
 | `npm run build` | Build electron main + renderer into `dist-electron/` and `dist/` |
+| `node scripts/make-fixture.mjs` + `node scripts/e2e-smoke.mjs` | End-to-end smoke suite — drives the real UI over CDP against a throwaway library and asserts on the filesystem. Zero dependencies |
 
-Run production with `npx electron .` (loads the built `dist/` bundle; no dev server). On Windows, npm scripts are blocked by the PowerShell execution policy — use `cmd /c "…"`. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Run production with `npx electron .` (loads the built `dist/` bundle; no dev server). See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Keyboard
 
@@ -56,7 +59,7 @@ Full list in the app (`?`).
 
 ## Syncthing phone-sync
 
-One receive-only folder per phone directory, added to the library as roots (e.g. `D:\Jevesh\Oneplus-12\{Pictures, Downloads, Screenshots}`). Phone side is **send-only** so deletes never propagate. Step-by-step: [docs/SYNCTHING.md](docs/SYNCTHING.md).
+One receive-only folder per phone directory, added to the library as roots (e.g. `D:\<Phone>\{Pictures, Downloads, Screenshots}`). Phone side is **send-only** so deletes never propagate. Step-by-step: [docs/SYNCTHING.md](docs/SYNCTHING.md).
 
 ## Architecture in brief
 
